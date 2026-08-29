@@ -125,22 +125,63 @@ def _parse_bf_jc(raw: str) -> list[dict[str, object]]:
 def _list_today() -> list[dict[str, object]]:
     """获取今日竞彩足球列表。
 
-    使用 ``bf_jc.txt``（官方编号数据源）作为主源，保证「周六011」等标签与
-    竞彩官网/用户截图一致；再用 ``odds_jc.txt`` 补竞彩官方赔率（按 ScheduleID 合并）。
-    只保留与今天星期相同的场次（bf_jc.txt 可能含未来几天的赛事）。
-    若 bf_jc.txt 不可用，回退到旧的 odds_jc.txt 顺序列表（无官方标签）。
-    """
-    today_wd = _WEEKDAY_LABELS[_today().weekday()]
+    合并两个官方数据源：
+    - ``bf_jc.txt``：titan007 赛程页实时数据源，带官方编号、对阵、联赛等信息；
+      但**已完赛的前几场**（如周六001-005）会从这里消失。
+    - ``JcResult.aspx?d=今天``：返回今日已完赛场次（含周六001-005）。
 
-    # 主数据源：带官方编号、对阵
+    两者按官方编号（周X00N）合并、去重，再用 ``odds_jc.txt`` 补竞彩官方赔率。
+    同时按 ``bf_jc.txt`` 中的真实开赛日期过滤，避免把下周同一天（如下周六）的赛事混入。
+    若两个官方源均不可用，回退到旧的 odds_jc.txt 顺序列表（无官方标签）。
+    """
+    today_dt = _today()
+    today_wd = _WEEKDAY_LABELS[today_dt.weekday()]
+    today_date_str = today_dt.strftime("%Y-%m-%d")
+
+    def _match_date(match_time: str) -> str | None:
+        """把 titan007 时间串 ``YYYY,M,D,H,M,S``（月份从0开始）转为 ``YYYY-MM-DD``。"""
+        if not match_time:
+            return None
+        parts = match_time.split(",")
+        if len(parts) < 3:
+            return None
+        try:
+            year, month0, day = int(parts[0]), int(parts[1]), int(parts[2])
+            return f"{year}-{month0 + 1:02d}-{day:02d}"
+        except ValueError:
+            return None
+
+    matches_by_label: dict[str, dict[str, object]] = {}
+
+    # 数据源 1：bf_jc.txt（官方编号、对阵、开赛时间）
     try:
         raw_bf = fetch_text(BF_JC_URL, encoding="utf-8")
-        matches = [m for m in _parse_bf_jc(raw_bf) if str(m.get("label") or "").startswith(today_wd)]
+        for m in _parse_bf_jc(raw_bf):
+            label = str(m.get("label") or "")
+            if not label.startswith(today_wd):
+                continue
+            # 按真实日期过滤，防止混入下周同一天
+            if _match_date(str(m.get("match_time") or "")) != today_date_str:
+                continue
+            matches_by_label[label] = m
     except Exception:
-        matches = []
+        pass
 
-    # bf_jc.txt 失败或为空时，回退到 odds_jc.txt 旧行为
-    if not matches:
+    # 数据源 2：JcResult.aspx（补充已完赛的场次，如周六001-005）
+    try:
+        referer = f"https://jc.titan007.com/schedule.aspx?d={today_date_str}"
+        raw_jc = fetch_text(JC_RESULT_URL.format(date=today_date_str), encoding="utf-8", referer=referer)
+        for m in _parse_jc_result(raw_jc):
+            label = str(m.get("label") or "")
+            if not label.startswith(today_wd):
+                continue
+            # JcResult 优先级高于 bf_jc（已完赛场次更权威），覆盖同标签
+            matches_by_label[label] = m
+    except Exception:
+        pass
+
+    # 两个官方源都失败时，回退旧的 odds_jc.txt 顺序列表
+    if not matches_by_label:
         raw = fetch_text(JC_SCHEDULE_URL, encoding="gbk")
         matches: list[dict[str, object]] = []
         for block in _SPLIT_RE.split(raw.strip()):
@@ -164,7 +205,14 @@ def _list_today() -> list[dict[str, object]]:
                 continue
         return matches
 
-    # 补赔率数据
+    # 按官方编号排序
+    def _label_sort_key(m: dict[str, object]) -> int:
+        label = str(m.get("label") or "")
+        return int(label[2:]) if len(label) > 2 and label[2:].isdigit() else 0
+
+    matches = sorted(matches_by_label.values(), key=_label_sort_key)
+
+    # 补竞彩官方赔率（按 ScheduleID 合并）
     try:
         raw_odds = fetch_text(JC_SCHEDULE_URL, encoding="gbk")
         odds_map = _parse_odds_jc_lottery(raw_odds)
@@ -173,30 +221,21 @@ def _list_today() -> list[dict[str, object]]:
 
     for m in matches:
         home, draw, away = odds_map.get(str(m["match_id"]), (None, None, None))
-        m["lottery_home"] = home
-        m["lottery_draw"] = draw
-        m["lottery_away"] = away
+        m.setdefault("lottery_home", home)
+        m.setdefault("lottery_draw", draw)
+        m.setdefault("lottery_away", away)
 
-    # 按官方编号排序（周X + 三位数字）
-    def _label_sort_key(m: dict[str, object]) -> int:
-        label = str(m.get("label") or "")
-        return int(label[2:]) if len(label) > 2 and label[2:].isdigit() else 0
-
-    return sorted(matches, key=_label_sort_key)
+    return matches
 
 
-def _list_by_date(date_str: str) -> list[dict[str, object]]:
-    """通过 JcResult.aspx 获取指定历史日期的赛事（含周X00N 标签）。
+def _parse_jc_result(raw: str) -> list[dict[str, object]]:
+    """解析 JcResult.aspx 返回的文本，提取带官方编号、对阵的赛事列表。
 
-    数据结构：每场比赛以 ``!`` 分隔；每个 segment 中自带 ``周X00N`` 标签。
-    第一个比赛较特殊，ScheduleID 嵌入在 ``subleague.aspx?sclassid={联赛ID}${ID}``
-    链接里；其余比赛 ScheduleID 通常位于 segment 首字段。
-
-    注：该接口 Content-Type 为 UTF-8（与当日 odds_jc.txt 的 GBK 不同），须用 UTF-8 解码。
+    每场比赛以 ``!`` 分隔。数据有两种形态：
+    - 首个比赛段通常有 29 个字段，ScheduleID 嵌在 ``subleague.aspx?sclassid={联赛ID}${ID}``
+      （字段 5）里，队名分别在字段 13（主队）和 15（客队）。
+    - 后续比赛段通常有 24 个字段，ScheduleID 在字段 0，队名在字段 8 / 10。
     """
-    referer = f"https://jc.titan007.com/schedule.aspx?d={date_str}"
-    url = JC_RESULT_URL.format(date=date_str)
-    raw = fetch_text(url, encoding="utf-8", referer=referer)
     matches: list[dict[str, object]] = []
     for seg in raw.split("!"):
         if not seg:
@@ -205,8 +244,9 @@ def _list_by_date(date_str: str) -> list[dict[str, object]]:
         if not label_m:
             continue
         label = label_m.group(0)
+        fields = seg.split("^")
 
-        # 优先从 league URL 里取 ScheduleID（周五001这种情况）
+        # 优先从 league URL 里取 ScheduleID（首个比赛段）
         url_m = _SUBLEAGUE_URL_RE.search(seg)
         if url_m:
             match_id = url_m.group(1)
@@ -217,15 +257,42 @@ def _list_by_date(date_str: str) -> list[dict[str, object]]:
                 continue
             match_id = num_m.group(1)
 
+        # 队名：首个比赛段与其他段字段位置不同
+        hometeam: str | None = None
+        guestteam: str | None = None
+        match_time = ""
+        if len(fields) >= 16 and fields[5].startswith("subleague.aspx"):
+            # 首个比赛段：字段 13/15 为队名，字段 6 为开赛时间
+            hometeam = fields[13].split(",")[0].strip() if fields[13] else None
+            guestteam = fields[15].split(",")[0].strip() if fields[15] else None
+            match_time = fields[6].strip() if len(fields) > 6 else ""
+        elif len(fields) >= 11:
+            hometeam = fields[8].split(",")[0].strip() if fields[8] else None
+            guestteam = fields[10].split(",")[0].strip() if fields[10] else None
+            match_time = fields[1].strip() if len(fields) > 1 else ""
+
         matches.append(
             {
                 "match_id": match_id,
                 "label": label,
-                "lottery_home": None,
-                "lottery_draw": None,
-                "lottery_away": None,
+                "hometeam": hometeam,
+                "guestteam": guestteam,
+                "match_time": match_time,
             }
         )
+    return matches
+
+
+def _list_by_date(date_str: str) -> list[dict[str, object]]:
+    """通过 JcResult.aspx 获取指定历史日期的赛事（含周X00N 标签与对阵）。"""
+    referer = f"https://jc.titan007.com/schedule.aspx?d={date_str}"
+    url = JC_RESULT_URL.format(date=date_str)
+    raw = fetch_text(url, encoding="utf-8", referer=referer)
+    matches = _parse_jc_result(raw)
+    for m in matches:
+        m.setdefault("lottery_home", None)
+        m.setdefault("lottery_draw", None)
+        m.setdefault("lottery_away", None)
     return matches
 
 
