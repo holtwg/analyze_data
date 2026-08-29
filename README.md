@@ -150,67 +150,47 @@ python web_app.py 9000       # 指定端口
 
 `web_app.py` 是纯 Python 标准库实现的 HTTP 服务，可一键部署到任意支持 Python 的 PaaS，
 部署后手机会获得一个公网网址，随时打开即用。仓库已内置 `Procfile` / `railway.json` / `render.yaml` /
-`Spacefile` / `requirements.txt` 与 `/healthz` 健康检查，开箱即用。
+`requirements.txt` 与 `/healthz` 健康检查，开箱即用。
 
 > **绑卡提示**：Railway / Render 免费实例现在常要求绑定信用卡做身份验证（$1 临时预授权，不会扣款）。
-> 若你不想绑卡，直接用下方的 **Deta Space** 或 **Cloudflare Tunnel** 方案。
+> 若你不想绑卡，推荐先用下方的 **Cloudflare Tunnel**（完全免费、无需账号）。
 
-### 方式一：Railway（推荐，最简单）
+### 方式一：Cloudflare Tunnel（无需信用卡、无需账号，推荐）
 
-1. 在 GitHub 新建一个**空仓库**，把本仓库 push 上去（见下方「推送到 GitHub」）。
-2. 打开 https://railway.app → 用 GitHub 登录 → `New Project` → `Deploy from GitHub repo` → 选你的仓库。
-3. Railway 自动识别 `railway.json` 安装依赖并启动；免费版即分配公网域名 `xxx.up.railway.app`。
-4. 手机浏览器打开该域名即可使用。
+Cloudflare Quick Tunnels 是当前最稳的免费方案：不绑卡、不要账号、自动生成 HTTPS 公网链接，
+适合先快速把手机跑通。唯一要求是**本机需要一直开着**。
 
-### 方式二：Render
-
-1. 同上先把代码 push 到 GitHub。
-2. 打开 https://render.com → 用 GitHub 登录 → `New` → `Web Service` → 选仓库。
-3. Render 自动读取 `render.yaml`：`plan: free`，`buildCommand` 装依赖、`startCommand` 启动服务。
-4. 部署完成后获得 `xxx.onrender.com` 公网域名，手机直接打开。
-
-### 方式三：Deta Space（无需信用卡，推荐替代）
-
-1. 安装 Deta Space CLI（Windows PowerShell）：
+1. 下载 `cloudflared`（Windows）：https://github.com/cloudflare/cloudflared/releases
+   - 推荐下载 `cloudflared-windows-amd64.exe`，改名为 `cloudflared.exe` 放到 PATH 里，
+     或项目根目录 `F:\a\workbuddy\football-odds-analysis\` 下。
+2. 项目根目录已提供 `start_tunnel.ps1`，双击或右键「使用 PowerShell 运行」即可：
+   - 它会自动启动 `python web_app.py`
+   - 然后启动 `cloudflared tunnel --url http://localhost:8000`
+   - 控制台会输出形如 `https://xxx.trycloudflare.com` 的公网链接，手机直接打开
+3. 想手动分步执行：
    ```powershell
-   iwr https://get.deta.dev/space-cli.ps1 -useb | iex
-   ```
-2. 打开 https://deta.space 注册/登录（邮箱即可，**无需信用卡**）。
-3. 在 Deta Space 的 Teletype（底部命令栏）生成一个 Access Token，回到本机运行：
-   ```bash
-   space login
-   ```
-4. 在项目根目录运行：
-   ```bash
-   space new
-   # 项目名可填 football-odds-analysis
-   ```
-5. 部署：
-   ```bash
-   space push
-   ```
-6. Deta Space 会读 `Spacefile`（Python 3.9，`python web_app.py`），安装 `requirements.txt` 后上线，
-   分配 `xxx.deta.app` 公网域名。
-
-### 方式四：Cloudflare Tunnel（本地穿透，无需信用卡）
-
-如果你不想用任何 PaaS，可以让本地电脑常开，通过 Cloudflare 免费隧道暴露公网：
-
-1. 本机先启动网页服务：
-   ```bash
+   # 窗口 1
    python web_app.py
-   ```
-2. 下载 `cloudflared`（Windows）：https://github.com/cloudflare/cloudflared/releases
-3. 在同一台机器运行：
-   ```bash
+   # 窗口 2（同一台机器）
    cloudflared tunnel --url http://localhost:8000
    ```
-4. 命令行会输出一个 `https://xxx.trycloudflare.com` 的临时公网网址，手机即可打开。
-5. 想要固定域名：到 https://dash.cloudflare.com 注册免费账号 → Zero Trust → Tunnels → Create tunnel →
-   选择 Cloudflared connector，按提示在本机运行一条长期命令，即可获得固定 `https://你的域名.xxx`。
+4. 想要固定域名：到 https://dash.cloudflare.com 注册免费账号 → Zero Trust → Networks → Tunnels →
+   Create a tunnel → Cloudflared，按提示安装 connector，配置 Public hostname 指向 `http://localhost:8000`，
+   即可获得固定 `https://你的域名.xxx`（仍然免费）。
 
-> 免费层注意：PaaS 免费实例在**一段时间无访问后会休眠**，首次打开需等待数秒冷启动；
-> 持续运行需升级付费 plan。此外 titan007 数据源有频率限制，多人高频访问可能被限流。
+> 注意：Quick Tunnel 每次重启会换链接；如需固定链接请按第 4 步走。
+
+### 方式二：Railway / Render（可能需要绑卡）
+
+如果你**不想本机常开**，可尝试这两个 PaaS：
+
+1. 把代码 push 到 GitHub。
+2. 打开 https://railway.app 或 https://render.com，用 GitHub 登录 → 选仓库部署。
+3. 平台自动读取 `railway.json` / `render.yaml` 安装依赖、启动服务，分配公网域名。
+4. 手机浏览器打开域名即可。
+
+> 注意：这两个平台近年常要求绑定信用卡做身份验证（$1 临时预授权，不会扣款），
+> 不想绑卡请用方式一 Cloudflare Tunnel。
 
 ### 推送到 GitHub
 
