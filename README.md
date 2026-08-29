@@ -150,7 +150,10 @@ python web_app.py 9000       # 指定端口
 
 `web_app.py` 是纯 Python 标准库实现的 HTTP 服务，可一键部署到任意支持 Python 的 PaaS，
 部署后手机会获得一个公网网址，随时打开即用。仓库已内置 `Procfile` / `railway.json` / `render.yaml` /
-`requirements.txt` 与 `/healthz` 健康检查，开箱即用。
+`Spacefile` / `requirements.txt` 与 `/healthz` 健康检查，开箱即用。
+
+> **绑卡提示**：Railway / Render 免费实例现在常要求绑定信用卡做身份验证（$1 临时预授权，不会扣款）。
+> 若你不想绑卡，直接用下方的 **Deta Space** 或 **Cloudflare Tunnel** 方案。
 
 ### 方式一：Railway（推荐，最简单）
 
@@ -166,7 +169,47 @@ python web_app.py 9000       # 指定端口
 3. Render 自动读取 `render.yaml`：`plan: free`，`buildCommand` 装依赖、`startCommand` 启动服务。
 4. 部署完成后获得 `xxx.onrender.com` 公网域名，手机直接打开。
 
-> 免费层注意：Railway/Render 免费实例在**一段时间无访问后会休眠**，首次打开需等待数秒冷启动；
+### 方式三：Deta Space（无需信用卡，推荐替代）
+
+1. 安装 Deta Space CLI（Windows PowerShell）：
+   ```powershell
+   iwr https://get.deta.dev/space-cli.ps1 -useb | iex
+   ```
+2. 打开 https://deta.space 注册/登录（邮箱即可，**无需信用卡**）。
+3. 在 Deta Space 的 Teletype（底部命令栏）生成一个 Access Token，回到本机运行：
+   ```bash
+   space login
+   ```
+4. 在项目根目录运行：
+   ```bash
+   space new
+   # 项目名可填 football-odds-analysis
+   ```
+5. 部署：
+   ```bash
+   space push
+   ```
+6. Deta Space 会读 `Spacefile`（Python 3.9，`python web_app.py`），安装 `requirements.txt` 后上线，
+   分配 `xxx.deta.app` 公网域名。
+
+### 方式四：Cloudflare Tunnel（本地穿透，无需信用卡）
+
+如果你不想用任何 PaaS，可以让本地电脑常开，通过 Cloudflare 免费隧道暴露公网：
+
+1. 本机先启动网页服务：
+   ```bash
+   python web_app.py
+   ```
+2. 下载 `cloudflared`（Windows）：https://github.com/cloudflare/cloudflared/releases
+3. 在同一台机器运行：
+   ```bash
+   cloudflared tunnel --url http://localhost:8000
+   ```
+4. 命令行会输出一个 `https://xxx.trycloudflare.com` 的临时公网网址，手机即可打开。
+5. 想要固定域名：到 https://dash.cloudflare.com 注册免费账号 → Zero Trust → Tunnels → Create tunnel →
+   选择 Cloudflared connector，按提示在本机运行一条长期命令，即可获得固定 `https://你的域名.xxx`。
+
+> 免费层注意：PaaS 免费实例在**一段时间无访问后会休眠**，首次打开需等待数秒冷启动；
 > 持续运行需升级付费 plan。此外 titan007 数据源有频率限制，多人高频访问可能被限流。
 
 ### 推送到 GitHub

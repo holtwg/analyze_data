@@ -1,0 +1,8 @@
+v: 0
+app_name: "football-odds-analysis"
+micros:
+  - name: web
+    src: ./
+    engine: python3.9
+    primary: true
+    run: python web_app.py
