@@ -33,9 +33,9 @@ _WEEKDAY_RE = re.compile(r"(?:周|星期|礼拜)\s*([一二三四五六日123456
 _NUMBER_RE = re.compile(r"(?:^|[^\d])(\d{1,3})(?:[^\d]|$)")
 _DIRECT_ID_RE = re.compile(r"\b(\d{6,})\b")
 _LABEL_RE = re.compile(r"周[一二三四五六日]\d{1,3}")
-# JcResult.aspx 中每场比赛以 "!" 分隔；第一个比赛把 ScheduleID 放在
-# subleague.aspx?sclassid={联赛ID}${ScheduleID} 里，其余比赛 ScheduleID 在字段 0。
-_SUBLEAGUE_URL_RE = re.compile(r"subleague\.aspx\?sclassid=\d+\$(\d{6,8})")
+# JcResult.aspx / bf_jc.txt 中每场比赛以 "!" 分隔；某些比赛把 ScheduleID 放在
+# subleague.aspx?sclassid={联赛ID}${ScheduleID}（大小写不敏感）里，其余比赛 ScheduleID 在字段 0。
+_SUBLEAGUE_URL_RE = re.compile(r"subleague\.aspx\?sclassid=\d+\$(\d{6,8})", re.IGNORECASE)
 _MATCH_ID_RE = re.compile(r"\b(\d{6,8})\b")
 
 
@@ -92,9 +92,16 @@ def _parse_odds_jc_lottery(raw: str) -> dict[str, tuple[float | None, float | No
 def _parse_bf_jc(raw: str) -> list[dict[str, object]]:
     """解析 bf_jc.txt，返回带官方编号（周X00N）的赛事列表。
 
-    该文件是 jc.titan007.com 首页/赛程页实际使用的数据源，字段格式为：
-    ``ScheduleID^MatchTime^UpdateTime^status^Label^LeagueID^...^HomeTeam^HomeID^AwayTeam^AwayID^...``
-    以 ``!`` 分隔记录。只保留含 ``周X00N`` 标签的场次。
+    该文件是 jc.titan007.com 首页/赛程页实际使用的数据源，以 ``!`` 分隔记录。
+    数据段有两种形态：
+
+    - 普通段：字段 0 为 ScheduleID，字段 4 为 ``周X00N`` 标签，字段 8/10 为主客队名。
+    - 特殊段（如每个联赛首场）：字段 0 为联赛 ID，真正的 ScheduleID 嵌在
+      ``SubLeague.aspx?SclassID={联赛ID}${ScheduleID}`` 链接里（字段 5），
+      标签在字段 9，队名在字段 13/15。
+
+    因此解析时：先在整个段中搜索官方编号标签；有 subleague URL 时按特殊段取 ID
+    与队名，否则按普通段取。
     """
     matches: list[dict[str, object]] = []
     for seg in raw.split("!"):
@@ -103,20 +110,33 @@ def _parse_bf_jc(raw: str) -> list[dict[str, object]]:
         fields = seg.split("^")
         if len(fields) < 11:
             continue
-        label_m = _LABEL_RE.search(fields[4]) if len(fields) > 4 else None
+
+        # 官方编号标签在段中的位置不固定，必须在整个段里搜索
+        label_m = _LABEL_RE.search(seg)
         if not label_m:
             continue
         label = label_m.group(0)
-        match_id = fields[0].strip()
-        home_names = fields[8].split(",") if len(fields) > 8 and fields[8] else [""]
-        away_names = fields[10].split(",") if len(fields) > 10 and fields[10] else [""]
+
+        # 优先从 subleague URL 取 ScheduleID（特殊段）
+        url_m = _SUBLEAGUE_URL_RE.search(seg)
+        if url_m:
+            match_id = url_m.group(1)
+            home_idx, away_idx = 13, 15
+            time_idx = 6
+        else:
+            match_id = fields[0].strip()
+            home_idx, away_idx = 8, 10
+            time_idx = 1
+
+        home_names = fields[home_idx].split(",") if len(fields) > home_idx and fields[home_idx] else [""]
+        away_names = fields[away_idx].split(",") if len(fields) > away_idx and fields[away_idx] else [""]
         matches.append(
             {
                 "match_id": match_id,
                 "label": label,
                 "hometeam": home_names[0].strip(),
                 "guestteam": away_names[0].strip(),
-                "match_time": fields[1].strip() if len(fields) > 1 else "",
+                "match_time": fields[time_idx].strip() if len(fields) > time_idx else "",
             }
         )
     return matches
@@ -131,25 +151,13 @@ def _list_today() -> list[dict[str, object]]:
     - ``JcResult.aspx?d=今天``：返回今日已完赛场次（含周六001-005）。
 
     两者按官方编号（周X00N）合并、去重，再用 ``odds_jc.txt`` 补竞彩官方赔率。
-    同时按 ``bf_jc.txt`` 中的真实开赛日期过滤，避免把下周同一天（如下周六）的赛事混入。
-    若两个官方源均不可用，回退到旧的 odds_jc.txt 顺序列表（无官方标签）。
+    以官方编号里的星期前缀作为当日标识（周六019 等跨日场次在 bf_jc.txt 中的真实开赛
+    时间可能已是次日，但仍属于今天竞彩期次），不再按真实开赛日期过滤，避免漏掉晚间
+    /凌晨场次。若两个官方源均不可用，回退到旧的 odds_jc.txt 顺序列表（无官方标签）。
     """
     today_dt = _today()
     today_wd = _WEEKDAY_LABELS[today_dt.weekday()]
     today_date_str = today_dt.strftime("%Y-%m-%d")
-
-    def _match_date(match_time: str) -> str | None:
-        """把 titan007 时间串 ``YYYY,M,D,H,M,S``（月份从0开始）转为 ``YYYY-MM-DD``。"""
-        if not match_time:
-            return None
-        parts = match_time.split(",")
-        if len(parts) < 3:
-            return None
-        try:
-            year, month0, day = int(parts[0]), int(parts[1]), int(parts[2])
-            return f"{year}-{month0 + 1:02d}-{day:02d}"
-        except ValueError:
-            return None
 
     matches_by_label: dict[str, dict[str, object]] = {}
 
@@ -158,10 +166,8 @@ def _list_today() -> list[dict[str, object]]:
         raw_bf = fetch_text(BF_JC_URL, encoding="utf-8")
         for m in _parse_bf_jc(raw_bf):
             label = str(m.get("label") or "")
+            # 官方编号的星期前缀即竞彩期次日期（周六019 属于今天，周日001 属于明天）
             if not label.startswith(today_wd):
-                continue
-            # 按真实日期过滤，防止混入下周同一天
-            if _match_date(str(m.get("match_time") or "")) != today_date_str:
                 continue
             matches_by_label[label] = m
     except Exception:
