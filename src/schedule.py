@@ -18,7 +18,7 @@ import re
 from datetime import datetime, timedelta
 
 from .client import fetch_text
-from .config import JC_RESULT_URL, JC_SCHEDULE_URL
+from .config import BF_JC_URL, JC_RESULT_URL, JC_SCHEDULE_URL
 
 _SPLIT_RE = re.compile(r"\s*\!\s*")
 
@@ -69,9 +69,9 @@ def list_matches(date: str | None = None) -> list[dict[str, object]]:
     return _list_by_date(date)
 
 
-def _list_today() -> list[dict[str, object]]:
-    raw = fetch_text(JC_SCHEDULE_URL, encoding="gbk")
-    matches: list[dict[str, object]] = []
+def _parse_odds_jc_lottery(raw: str) -> dict[str, tuple[float | None, float | None, float | None]]:
+    """从 odds_jc.txt 提取竞彩官方赔率，按 ScheduleID 索引。"""
+    out: dict[str, tuple[float | None, float | None, float | None]] = {}
     for block in _SPLIT_RE.split(raw.strip()):
         if not block:
             continue
@@ -79,24 +79,110 @@ def _list_today() -> list[dict[str, object]]:
         if not fields or not fields[0]:
             continue
         match_id = fields[0].strip()
-
-        def _to_float(v: str) -> float | None:
-            v = v.strip()
-            return float(v) if v else None
-
         try:
-            matches.append(
-                {
-                    "match_id": match_id,
-                    "label": None,
-                    "lottery_home": _to_float(fields[1]) if len(fields) > 1 else None,
-                    "lottery_draw": _to_float(fields[2]) if len(fields) > 2 else None,
-                    "lottery_away": _to_float(fields[3]) if len(fields) > 3 else None,
-                }
-            )
+            home = float(fields[1]) if len(fields) > 1 and fields[1].strip() else None
+            draw = float(fields[2]) if len(fields) > 2 and fields[2].strip() else None
+            away = float(fields[3]) if len(fields) > 3 and fields[3].strip() else None
         except ValueError:
             continue
+        out[match_id] = (home, draw, away)
+    return out
+
+
+def _parse_bf_jc(raw: str) -> list[dict[str, object]]:
+    """解析 bf_jc.txt，返回带官方编号（周X00N）的赛事列表。
+
+    该文件是 jc.titan007.com 首页/赛程页实际使用的数据源，字段格式为：
+    ``ScheduleID^MatchTime^UpdateTime^status^Label^LeagueID^...^HomeTeam^HomeID^AwayTeam^AwayID^...``
+    以 ``!`` 分隔记录。只保留含 ``周X00N`` 标签的场次。
+    """
+    matches: list[dict[str, object]] = []
+    for seg in raw.split("!"):
+        if not seg:
+            continue
+        fields = seg.split("^")
+        if len(fields) < 11:
+            continue
+        label_m = _LABEL_RE.search(fields[4]) if len(fields) > 4 else None
+        if not label_m:
+            continue
+        label = label_m.group(0)
+        match_id = fields[0].strip()
+        home_names = fields[8].split(",") if len(fields) > 8 and fields[8] else [""]
+        away_names = fields[10].split(",") if len(fields) > 10 and fields[10] else [""]
+        matches.append(
+            {
+                "match_id": match_id,
+                "label": label,
+                "hometeam": home_names[0].strip(),
+                "guestteam": away_names[0].strip(),
+                "match_time": fields[1].strip() if len(fields) > 1 else "",
+            }
+        )
     return matches
+
+
+def _list_today() -> list[dict[str, object]]:
+    """获取今日竞彩足球列表。
+
+    使用 ``bf_jc.txt``（官方编号数据源）作为主源，保证「周六011」等标签与
+    竞彩官网/用户截图一致；再用 ``odds_jc.txt`` 补竞彩官方赔率（按 ScheduleID 合并）。
+    只保留与今天星期相同的场次（bf_jc.txt 可能含未来几天的赛事）。
+    若 bf_jc.txt 不可用，回退到旧的 odds_jc.txt 顺序列表（无官方标签）。
+    """
+    today_wd = _WEEKDAY_LABELS[_today().weekday()]
+
+    # 主数据源：带官方编号、对阵
+    try:
+        raw_bf = fetch_text(BF_JC_URL, encoding="utf-8")
+        matches = [m for m in _parse_bf_jc(raw_bf) if str(m.get("label") or "").startswith(today_wd)]
+    except Exception:
+        matches = []
+
+    # bf_jc.txt 失败或为空时，回退到 odds_jc.txt 旧行为
+    if not matches:
+        raw = fetch_text(JC_SCHEDULE_URL, encoding="gbk")
+        matches: list[dict[str, object]] = []
+        for block in _SPLIT_RE.split(raw.strip()):
+            if not block:
+                continue
+            fields = block.split("^")
+            if not fields or not fields[0]:
+                continue
+            match_id = fields[0].strip()
+            try:
+                matches.append(
+                    {
+                        "match_id": match_id,
+                        "label": None,
+                        "lottery_home": float(fields[1]) if len(fields) > 1 and fields[1].strip() else None,
+                        "lottery_draw": float(fields[2]) if len(fields) > 2 and fields[2].strip() else None,
+                        "lottery_away": float(fields[3]) if len(fields) > 3 and fields[3].strip() else None,
+                    }
+                )
+            except ValueError:
+                continue
+        return matches
+
+    # 补赔率数据
+    try:
+        raw_odds = fetch_text(JC_SCHEDULE_URL, encoding="gbk")
+        odds_map = _parse_odds_jc_lottery(raw_odds)
+    except Exception:
+        odds_map = {}
+
+    for m in matches:
+        home, draw, away = odds_map.get(str(m["match_id"]), (None, None, None))
+        m["lottery_home"] = home
+        m["lottery_draw"] = draw
+        m["lottery_away"] = away
+
+    # 按官方编号排序（周X + 三位数字）
+    def _label_sort_key(m: dict[str, object]) -> int:
+        label = str(m.get("label") or "")
+        return int(label[2:]) if len(label) > 2 and label[2:].isdigit() else 0
+
+    return sorted(matches, key=_label_sort_key)
 
 
 def _list_by_date(date_str: str) -> list[dict[str, object]]:
@@ -166,8 +252,9 @@ def resolve_match_ref(ref: str, today: datetime | None = None) -> dict[str, obje
 
     支持格式：
         - ``周六015`` / ``星期6 15`` / ``周五001``：按真实日历日期定位到「该星期最近一次出现那天」的
-          第 N 场（标签精确匹配；历史日期走 JcResult.aspx，当天走当日列表按序号）。
-        - ``015`` / ``15``：直接用**当日**列表第 N 场。
+          官方编号场次（标签精确匹配；历史日期走 JcResult.aspx，当天走 bf_jc.txt 官方编号源）。
+        - ``015`` / ``15``：优先按「今天星期 + 序号」的官方编号定位（如今天周六则 015=周六015）；
+          未命中时回退到当日列表第 N 位（可能与官网编号不一致，会给出提示）。
         - ``3000426``：直接按 ScheduleID 分析。
         - 自由文本中会自动提取上述任意一种标识，例如 ``@image#1:xxx.png 周五001``。
 
@@ -216,17 +303,19 @@ def resolve_match_ref(ref: str, today: datetime | None = None) -> dict[str, obje
         if not matches:
             raise ValueError(f"{label}（{date_str}）未获取到赛事列表，可能该日无竞彩或接口不可用。")
 
-        # 优先按标签精确匹配（历史日期自带标签；当天列表无标签则回退序号）
+        # 优先按官方编号标签精确匹配；未命中再回退顺序索引
         hit = next((x for x in matches if x.get("label") == label), None)
-        if hit is None:
+        if hit is not None:
+            note = f"已按官方编号定位到 {label}（{date_str}）"
+        else:
             idx = index - 1
             if 0 <= idx < len(matches):
                 hit = matches[idx]
+                note = f"注意：未找到官方编号 {label}，已按列表第 {index} 位返回（可能与官网编号不一致）"
 
         if hit is None:
             raise ValueError(f"未找到 {label}（{date_str} 共 {len(matches)} 场）")
 
-        note = f"已按标签定位到 {label}（{date_str}）"
         return {
             "match_id": str(hit["match_id"]),
             "source": "weekday_number",
@@ -237,24 +326,40 @@ def resolve_match_ref(ref: str, today: datetime | None = None) -> dict[str, obje
             "note": note,
         }
 
-    # 3) 仅序号 → 当日列表
+    # 3) 仅序号 → 当日列表，优先按「今天星期+序号」的官方标签定位
     m = _NUMBER_RE.search(ref)
     if m:
         index = int(m.group(1))
         matches = list_matches()
         if not matches:
             raise ValueError("当前竞彩列表为空")
+
+        today_wd = _WEEKDAY_LABELS[today.weekday()]
+        label = f"{today_wd}{index:03d}"
+        hit = next((x for x in matches if x.get("label") == label), None)
+        if hit is not None:
+            return {
+                "match_id": str(hit["match_id"]),
+                "source": "number",
+                "index": index,
+                "weekday": today_wd,
+                "target_date": _today_str(),
+                "label": label,
+                "note": f"已按官方编号定位到 {label}",
+            }
+
+        # 标签未命中时回退到顺序索引（旧行为），并给出提示
         idx = index - 1
         if idx < 0 or idx >= len(matches):
-            raise ValueError(f"序号 {index} 超出范围，当前共 {len(matches)} 场")
+            raise ValueError(f"未找到 {label}，当前共 {len(matches)} 场")
         return {
             "match_id": str(matches[idx]["match_id"]),
             "source": "number",
             "index": index,
-            "weekday": None,
-            "target_date": None,
+            "weekday": today_wd,
+            "target_date": _today_str(),
             "label": None,
-            "note": None,
+            "note": f"注意：未找到官方编号 {label}，已按列表第 {index} 位返回（可能与官网编号不一致）",
         }
 
     raise ValueError(f"无法识别输入：{ref}")

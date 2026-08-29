@@ -11,8 +11,15 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
-# 竞彩足球当日赛事列表（GBK 编码）
+# 竞彩足球当日赛事列表（GBK 编码），含 ScheduleID 与竞彩胜平负赔率。
+# 注意：该文件按写入顺序排列，与官方「周X00N」编号可能存在偏移（如前几条
+# 可能是已开赛/非足彩场次），因此不应直接按序号索引对应官方编号。
 JC_SCHEDULE_URL = "https://jc.titan007.com/xml/odds_jc.txt"
+
+# 竞彩足球官方比分/赛程列表（UTF-8 编码）。这是 jc.titan007.com 首页/schedule.aspx
+# 实际使用的数据源，每条记录自带「周X00N」官方编号、对阵、联赛等信息，
+# 与用户在竞彩官网/截图中看到的场次号一致。用于把「周六011」等映射到正确 ScheduleID。
+BF_JC_URL = "https://jc.titan007.com/xml/bf_jc.txt"
 
 # 按指定日期获取竞彩赛事列表/赛果（GBK 编码）。
 # 站点 schedule.aspx?d=日期 内部通过该接口加载历史/指定日期的赛事；

@@ -10,6 +10,11 @@ env/
 .env
 *.log
 
+# 临时生成的隧道地址（每次运行都变，勿入库）
+tunnel_url.txt
+cf_out.log
+cf_err.log
+
 # 项目内部数据（不入库）
 .workbuddy/
 
