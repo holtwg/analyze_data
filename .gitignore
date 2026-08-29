@@ -13,6 +13,11 @@ env/
 # 项目内部数据（不入库）
 .workbuddy/
 
+# Cloudflare Tunnel 二进制（体积大，需自行从 GitHub 下载，勿入库）
+cloudflared.exe
+cloudflared.exe.bak
+cloudflared-windows-amd64.exe
+
 # IDE
 .idea/
 

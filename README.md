@@ -160,17 +160,21 @@ python web_app.py 9000       # 指定端口
 Cloudflare Quick Tunnels 是当前最稳的免费方案：不绑卡、不要账号、自动生成 HTTPS 公网链接，
 适合先快速把手机跑通。唯一要求是**本机需要一直开着**。
 
-1. 下载 `cloudflared`（Windows）：https://github.com/cloudflare/cloudflared/releases
-   - 推荐下载 `cloudflared-windows-amd64.exe`，改名为 `cloudflared.exe` 放到 PATH 里，
-     或项目根目录 `F:\a\workbuddy\football-odds-analysis\` 下。
-2. 项目根目录已提供 `start_tunnel.ps1`，双击或右键「使用 PowerShell 运行」即可：
-   - 它会自动启动 `python web_app.py`
-   - 然后启动 `cloudflared tunnel --url http://localhost:8000`
-   - 控制台会输出形如 `https://xxx.trycloudflare.com` 的公网链接，手机直接打开
+1. 下载 `cloudflared`（**必须是 Windows 版**）：https://github.com/cloudflare/cloudflared/releases
+   - ⚠️ **务必下载 `cloudflared-windows-amd64.exe`**。不要下 `cloudflared-darwin-*` / `cloudflared-linux-*`
+     （mac/Linux 版即便改名成 `.exe` 也无法在 Windows 运行，会报"不是有效的 Win32 应用程序"）。
+   - 把下载的文件改名为 `cloudflared.exe`，放到项目根目录
+     `F:\a\workbuddy\football-odds-analysis\`（脚本优先用本目录的这个 exe，无需加入 PATH）。
+2. 项目根目录已提供 `start_tunnel.ps1` + `start_tunnel.bat`，双击 `start_tunnel.bat` 即可：
+   - 脚本会**自动定位带依赖的 Python**（优先用虚拟环境 `…\envs\default\Scripts\python.exe`），
+     无需手动配置 PATH。
+   - 自动避开被占用的端口（默认 8000，占用则顺延），再启动 `python web_app.py`。
+   - 等服务 `/healthz` 就绪后，启动 `cloudflared tunnel --url http://localhost:端口`。
+   - 控制台会高亮输出形如 `https://xxx.trycloudflare.com` 的公网链接，手机直接打开。
 3. 想手动分步执行：
    ```powershell
-   # 窗口 1
-   python web_app.py
+   # 窗口 1：用虚拟环境 python 启动网页
+   C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe web_app.py
    # 窗口 2（同一台机器）
    cloudflared tunnel --url http://localhost:8000
    ```

@@ -1,110 +1,109 @@
 #Requires -Version 5.1
-<#
-.SYNOPSIS
-    ä¸€é”®å¯åŠ¨ã€Œç«å½©èµ”ç‡åˆ†æç½‘é¡µç‰ˆ + Cloudflare Tunnel å…¬ç½‘ç©¿é€ã€ã€‚
-
-.DESCRIPTION
-    1. åœ¨æœ¬æœºå¯åŠ¨ python web_app.pyï¼ˆé»˜è®¤ç«¯å£ 8000ï¼‰ã€‚
-    2. ç­‰å¾…æœåŠ¡å¯ç”¨åï¼Œè‡ªåŠ¨å¯åŠ¨ cloudflared tunnel --url http://localhost:8000ã€‚
-    3. æ§åˆ¶å°ä¼šè¾“å‡º https://xxx.trycloudflare.com çš„å…¬ç½‘é“¾æ¥ï¼Œæ‰‹æœºæµè§ˆå™¨æ‰“å¼€å³å¯ã€‚
-
-.REQUIREMENTS
-    - å·²å®‰è£… Python å¹¶åœ¨ PATH ä¸­ï¼ˆæˆ–æœ¬ç›®å½•çš„ venvï¼‰ã€‚
-    - å·²ä¸‹è½½ cloudflared.exe å¹¶æ”¾åˆ° PATH æˆ–æœ¬ç›®å½•ï¼ˆè§ README æ–¹å¼ä¸€ï¼‰ã€‚
-
-.NOTES
-    Cloudflare Quick Tunnel æ¯æ¬¡å¯åŠ¨ä¼šç”Ÿæˆä¸åŒçš„ä¸´æ—¶é“¾æ¥ã€‚
-    å¦‚éœ€å›ºå®šé“¾æ¥ï¼Œè¯·æŒ‰ README çš„"æ–¹å¼ä¸€"ç¬¬ 4 æ­¥é…ç½® Cloudflare Zero Trust Tunnelsã€‚
-#>
-
 param(
-    [int]$Port = 8000,
-    [string]$Cloudflared = "cloudflared"
+    [int]$Port = 8000
 )
 
-$ErrorActionPreference = "Stop"
+# ²»ÒªÉè Stop£ºcloudflared »á°ÑÔËĞĞÈÕÖ¾Ğ´µ½ stderr£¬Stop »á°ÑËüµ±³É´íÎóÖ±½ÓÖĞÖ¹ËíµÀ¡£
+$ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $root
 
-# æ£€æŸ¥ cloudflared æ˜¯å¦å­˜åœ¨
-$cf = Get-Command $Cloudflared -ErrorAction SilentlyContinue
-if (-not $cf) {
-    $localCf = Join-Path $root "cloudflared.exe"
-    if (Test-Path $localCf) {
-        $Cloudflared = $localCf
-    } else {
-        Write-Host "é”™è¯¯ï¼šæ‰¾ä¸åˆ° cloudflaredã€‚" -ForegroundColor Red
-        Write-Host "è¯·ä¸‹è½½ Windows ç‰ˆ cloudflared.exe å¹¶æ”¾åˆ°æœ¬ç›®å½•ï¼Œæˆ–åŠ å…¥ç³»ç»Ÿ PATHã€‚" -ForegroundColor Yellow
-        Write-Host "ä¸‹è½½åœ°å€ï¼šhttps://github.com/cloudflare/cloudflared/releases" -ForegroundColor Yellow
-        pause
-        exit 1
-    }
-} else {
-    $Cloudflared = $cf.Source
-}
-
-# æ£€æŸ¥ Python ä¸ä¾èµ–
-python --version 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "é”™è¯¯ï¼šæ‰¾ä¸åˆ° pythonï¼Œè¯·ç¡®è®¤ Python å·²å®‰è£…å¹¶åŠ å…¥ PATHã€‚" -ForegroundColor Red
-    pause
-    exit 1
-}
-
-if (-not (Test-Path (Join-Path $root "requirements.txt"))) {
-    Write-Host "é”™è¯¯ï¼šæœªæ‰¾åˆ° requirements.txtï¼Œè¯·ç¡®è®¤åœ¨æœ¬é¡¹ç›®æ ¹ç›®å½•è¿è¡Œã€‚" -ForegroundColor Red
-    pause
-    exit 1
-}
-
-Write-Host "[*] æ£€æŸ¥ Python ä¾èµ–..." -ForegroundColor Cyan
-python -m pip install -q -r requirements.txt | Out-Null
-
-# å¯åŠ¨ web_app.py
-Write-Host "[*] å¯åŠ¨ç½‘é¡µæœåŠ¡ python web_app.py $Port ..." -ForegroundColor Cyan
-$webProc = Start-Process -FilePath "python" -ArgumentList "web_app.py", $Port -WorkingDirectory $root -PassThru -WindowStyle Minimized
-
-# ç­‰å¾…æœåŠ¡å¯ç”¨
-$url = "http://localhost:$Port/healthz"
-$ready = $false
-for ($i = 0; $i -lt 30; $i++) {
-    try {
-        $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
-        if ($resp.StatusCode -eq 200) {
-            $ready = $true
-            break
+function Find-Python {
+    $candidates = @(
+        "C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe",
+        "python",
+        "py"
+    )
+    foreach ($c in $candidates) {
+        try {
+            & $c -c "import httpx,parsel,typer" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { return $c }
+        } catch {
+            # ¸ÃºòÑ¡²»´æÔÚ£¬¼ÌĞøÏÂÒ»¸ö
         }
-    } catch {
-        Start-Sleep -Milliseconds 300
     }
+    return $null
 }
 
+function Get-FreePort {
+    param([int]$Start = 8000)
+    for ($p = $Start; $p -lt ($Start + 100); $p++) {
+        $listener = $null
+        try {
+            $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $p)
+            $listener.Start()
+            $listener.Stop()
+            return $p
+        } catch {
+            if ($listener) { try { $listener.Stop() } catch { } }
+        }
+    }
+    return $Start
+}
+
+# ¶Ë¿ÚÒÑ±»Õ¼ÓÃÔò×Ô¶¯Ë³ÑÓ£¬±ÜÃâ healthz 404
+$Port = Get-FreePort -Start $Port
+
+$py = Find-Python
+if (-not $py) {
+    Write-Host "´íÎó£ºÎ´ÕÒµ½ÒÑ°²×°ÒÀÀµ(httpx/parsel/typer)µÄ Python¡£" -ForegroundColor Red
+    Write-Host "ÇëÈ·ÈÏĞéÄâ»·¾³´æÔÚ£ºC:\Users\Administrator\.workbuddy\binaries\python\envs\default" -ForegroundColor Yellow
+    pause
+    exit 1
+}
+Write-Host "[*] Ê¹ÓÃ Python: $py" -ForegroundColor Cyan
+
+# cloudflared ÓÅÏÈÊ¹ÓÃ±¾Ä¿Â¼µÄ exe£¨ÎŞĞè¼ÓÈë PATH£©
+$localCf = Join-Path $root "cloudflared.exe"
+if (-not (Test-Path $localCf)) {
+    Write-Host "´íÎó£ºÎ´ÕÒµ½ cloudflared.exe£¨Ó¦·ÅÔÚ±¾Ä¿Â¼£©¡£" -ForegroundColor Red
+    Write-Host "ÏÂÔØµØÖ·£ºhttps://github.com/cloudflare/cloudflared/releases" -ForegroundColor Yellow
+    Write-Host "×¢Òâ£º±ØĞëÏÂÔØ cloudflared-windows-amd64.exe£¨Windows °æ£©£¬²»ÒªÏÂ darwin/linux °æ¡£" -ForegroundColor Yellow
+    pause
+    exit 1
+}
+
+Write-Host "[*] Æô¶¯ÍøÒ³·şÎñ python web_app.py $Port ..." -ForegroundColor Cyan
+$webProc = Start-Process -FilePath $py -ArgumentList "web_app.py", $Port `
+    -WorkingDirectory $root -PassThru -WindowStyle Minimized
+
+# µÈ´ı /healthz ¾ÍĞ÷£¨ÓÃ 127.0.0.1 Ç¿ÖÆ IPv4£¬±ÜÃâ localhost ½âÎöµ½ IPv6 ::1 Ê§°Ü£©
+$url = "http://127.0.0.1:$Port/healthz"
+$ready = $false
+for ($i = 0; $i -lt 40; $i++) {
+    try {
+        $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
+        if ($r.StatusCode -eq 200) { $ready = $true; break }
+    } catch {
+        Start-Sleep -Milliseconds 500
+    }
+}
 if (-not $ready) {
-    Write-Host "é”™è¯¯ï¼šç½‘é¡µæœåŠ¡å¯åŠ¨å¤±è´¥æˆ– /healthz æœªå“åº”ã€‚" -ForegroundColor Red
-    Write-Host "è¯·æ‰‹åŠ¨æ£€æŸ¥ python web_app.py æ˜¯å¦èƒ½æ­£å¸¸è¿è¡Œã€‚" -ForegroundColor Yellow
+    Write-Host "´íÎó£ºÍøÒ³·şÎñÆô¶¯Ê§°Ü»ò /healthz Î´ÏìÓ¦¡£" -ForegroundColor Red
+    Write-Host "ÇëÊÖ¶¯ÔËĞĞ 'python web_app.py' ÅÅ²é´íÎó¡£" -ForegroundColor Yellow
     Stop-Process -Id $webProc.Id -Force -ErrorAction SilentlyContinue
     pause
     exit 1
 }
 
-Write-Host "[*] ç½‘é¡µæœåŠ¡å·²å°±ç»ªï¼šhttp://localhost:$Port" -ForegroundColor Green
-Write-Host "[*] å¯åŠ¨ Cloudflare Tunnelï¼ˆè¯·ç¨å€™ï¼Œé¦–æ¬¡è¿æ¥éœ€è¦å‡ ç§’ï¼‰..." -ForegroundColor Cyan
+Write-Host "[*] ÍøÒ³·şÎñÒÑ¾ÍĞ÷£ºhttp://localhost:$Port" -ForegroundColor Green
+Write-Host "[*] Æô¶¯ Cloudflare Tunnel£¨Ê×´ÎÁ¬½ÓĞèÊıÃë£©..." -ForegroundColor Cyan
 Write-Host ""
 
-# å¯åŠ¨ cloudflaredï¼Œå¹¶æŠŠè¾“å‡ºçš„å…¬ç½‘é“¾æ¥é«˜äº®æ˜¾ç¤º
-& $Cloudflared tunnel --url "http://localhost:$Port" 2>&1 | ForEach-Object {
-    $line = $_
-    Write-Host $line
-    # é«˜äº® https://xxx.trycloudflare.com
-    if ($line -match "(https://[a-z0-9-]+\.trycloudflare\.com)") {
-        Write-Host ""
-        Write-Host "========================================" -ForegroundColor Green
-        Write-Host " æ‰‹æœºè®¿é—®åœ°å€ï¼š$($matches[1])" -ForegroundColor Green -BackgroundColor Black
-        Write-Host "========================================" -ForegroundColor Green
-        Write-Host ""
+try {
+    & $localCf tunnel --url "http://127.0.0.1:$Port" 2>&1 | ForEach-Object {
+        $line = $_
+        Write-Host $line
+        # ¸ßÁÁ https://xxx.trycloudflare.com
+        if ($line -match "(https://[a-z0-9-]+\.trycloudflare\.com)") {
+            Write-Host ""
+            Write-Host "========================================" -ForegroundColor Green
+            Write-Host " ÊÖ»ú·ÃÎÊµØÖ·£º$($matches[1])" -ForegroundColor Green -BackgroundColor Black
+            Write-Host "========================================" -ForegroundColor Green
+            Write-Host ""
+        }
     }
+} finally {
+    Write-Host "[*] Tunnel ÒÑÍË³ö£¬ÕıÔÚ¹Ø±ÕÍøÒ³·şÎñ..." -ForegroundColor Yellow
+    Stop-Process -Id $webProc.Id -Force -ErrorAction SilentlyContinue
 }
-
-# tunnel ç»“æŸåæ¸…ç†ç½‘é¡µæœåŠ¡
-Write-Host "[*] Tunnel å·²é€€å‡ºï¼Œæ­£åœ¨å…³é—­ç½‘é¡µæœåŠ¡..." -ForegroundColor Yellow
-Stop-Process -Id $webProc.Id -Force -ErrorAction SilentlyContinue
