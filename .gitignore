@@ -1,0 +1,21 @@
+# Python 缓存/包
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 本地环境 / 日志 / 敏感信息
+.env
+*.log
+
+# 项目内部数据（不入库）
+.workbuddy/
+
+# IDE
+.idea/
+
+# 系统
+.DS_Store
+Thumbs.db
