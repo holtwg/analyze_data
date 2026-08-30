@@ -61,14 +61,17 @@ class NbaSpreadAnalysis:
 
 
 def _bookmaker_line(b: NbaSpreadBookmaker, use_initial: bool):
-    """选择盘口线：体彩官* 无滚球盘，始终用页面最新（即时）数据；
-    其他公司历史比赛用初盘，未开赛用即时盘。"""
-    if b.is_lottery:
-        # 竞彩官方没有滚球，页面上"即时"列即最新盘/终盘
-        if b.live_up > 0 and b.live_down > 0:
-            return b.live_handicap, b.live_up, b.live_down
-        return b.init_handicap, b.init_up, b.init_down
+    """选择盘口线：未开赛赛事统一使用即时盘；历史比赛使用赛前初盘。
+
+    体彩官* 无滚球盘，若其即时盘缺失则回退到初盘（官* 页面"即时"列即最新盘）。
+    """
     if use_initial:
+        return b.init_handicap, b.init_up, b.init_down
+    # 未开赛：优先使用即时盘
+    if b.live_up > 0 and b.live_down > 0:
+        return b.live_handicap, b.live_up, b.live_down
+    # 即时盘缺失时，仅体彩官*回退到初盘
+    if b.is_lottery:
         return b.init_handicap, b.init_up, b.init_down
     return b.live_handicap, b.live_up, b.live_down
 
@@ -173,6 +176,8 @@ def format_nba_spread_report(r: NbaSpreadAnalysis) -> str:
     L.append(f"数据抓取: {r.fetched_at}")
     if r.is_historical:
         L.append("[历史比赛] 百家公司按赛前最终初盘计算；竞彩官方无滚球盘，使用页面最新数据")
+    else:
+        L.append("[未开赛] 百家公司按即时盘口计算；竞彩官方无滚球盘，使用页面最新数据")
     L.append("")
     L.append(f"主流{period_label}让分: {r.main_handicap_label}  （{r.main_line_n}/{r.n_companies} 家公司）")
     L.append("")

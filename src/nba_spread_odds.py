@@ -119,13 +119,17 @@ def parse_spread_html(html: str) -> list[NbaSpreadBookmaker]:
     return out
 
 
-def _is_historical_match(match_time: str) -> bool:
-    """根据开赛时间判断是否已开赛（历史比赛）。"""
+def _is_historical_match(match_time: str, fetched_at: datetime | None = None) -> bool:
+    """根据开赛时间判断是否已开赛（历史比赛）。
+
+    使用数据抓取时间作为参照，避免本地时钟/时区波动导致未开赛赛事被误判。
+    """
     if not match_time:
         return False
     try:
         dt = datetime.strptime(match_time, "%Y-%m-%d %H:%M:%S")
-        return datetime.now() >= dt
+        ref = fetched_at or datetime.now()
+        return ref >= dt
     except ValueError:
         return False
 
@@ -152,12 +156,13 @@ def fetch_nba_spread(match_id: str) -> NbaSpreadMatch:
 
     bookmakers = parse_spread_html(html)
     home, guest, match_time = fetch_nba_meta(match_id)
+    fetched_at = datetime.now()
     return NbaSpreadMatch(
         match_id=str(match_id),
         hometeam=home,
         guestteam=guest,
         match_time=match_time,
         bookmakers=bookmakers,
-        fetched_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        is_historical=_is_historical_match(match_time),
+        fetched_at=fetched_at.strftime("%Y-%m-%d %H:%M:%S"),
+        is_historical=_is_historical_match(match_time, fetched_at),
     )
