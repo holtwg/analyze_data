@@ -60,40 +60,33 @@ class NbaSpreadAnalysis:
     is_historical: bool = False
 
 
-def _bookmaker_line(b: NbaSpreadBookmaker, use_initial: bool):
-    """选择盘口线：未开赛赛事统一使用即时盘；历史比赛使用赛前初盘。
+def _bookmaker_line(b: NbaSpreadBookmaker):
+    """选择盘口线：统一使用页面最新（即时）盘口。
 
-    体彩官* 无滚球盘，若其即时盘缺失则回退到初盘（官* 页面"即时"列即最新盘）。
+    体彩官* 无滚球盘，若其即时盘缺失则回退到初盘。
     """
-    if use_initial:
-        return b.init_handicap, b.init_up, b.init_down
-    # 未开赛：优先使用即时盘
     if b.live_up > 0 and b.live_down > 0:
         return b.live_handicap, b.live_up, b.live_down
-    # 即时盘缺失时，仅体彩官*回退到初盘
     if b.is_lottery:
         return b.init_handicap, b.init_up, b.init_down
-    return b.live_handicap, b.live_up, b.live_down
+    return b.init_handicap, b.init_up, b.init_down
 
 
 def analyze_nba_spread(match: NbaSpreadMatch) -> NbaSpreadAnalysis:
-    use_initial = match.is_historical  # 历史比赛用初盘，避免赛后实时盘失真
-
     rows = []
     for b in match.bookmakers:
-        h, up, down = _bookmaker_line(b, use_initial)
+        h, up, down = _bookmaker_line(b)
         if up > 0 and down > 0 and h != 0:
             rows.append(b)
     if not rows:
-        period = "初盘" if use_initial else "即时"
         raise ValueError(
-            f"比赛 {match.match_id} 暂未提供{period}让分盘口数据"
+            f"比赛 {match.match_id} 暂未提供让分盘口数据"
             f"（可能尚未开盘或数据源未给出让分盘）"
         )
 
     covers = []
     for b in rows:
-        _, up, down = _bookmaker_line(b, use_initial)
+        _, up, down = _bookmaker_line(b)
         c = _hk_cover(up, down)
         covers.append((b, c))
 
@@ -101,16 +94,16 @@ def analyze_nba_spread(match: NbaSpreadMatch) -> NbaSpreadAnalysis:
     consensus_away = 1.0 - consensus_home
 
     # 主流让分（mode）
-    cnt = Counter(_bookmaker_line(b, use_initial)[0] for b, _ in covers)
+    cnt = Counter(_bookmaker_line(b)[0] for b, _ in covers)
     main_h = cnt.most_common(1)[0][0]
-    main_line = [(b, c) for b, c in covers if _bookmaker_line(b, use_initial)[0] == main_h]
+    main_line = [(b, c) for b, c in covers if _bookmaker_line(b)[0] == main_h]
     main_home = mean(c for _, c in main_line)
     main_away = 1.0 - main_home
 
     lottery = match.lottery
     lot = None
     if lottery:
-        lh, lup, ldown = _bookmaker_line(lottery, use_initial)
+        lh, lup, ldown = _bookmaker_line(lottery)
         if lup > 0 and ldown > 0:
             cover = _hk_cover(lup, ldown)
             # 体彩价值：以主流线共识为参照（注意竞彩让分线可能与市场主流不同）
@@ -128,7 +121,7 @@ def analyze_nba_spread(match: NbaSpreadMatch) -> NbaSpreadAnalysis:
     # 展示用：取主流线上的公司 + 体彩官*
     disp = []
     for b, c in main_line:
-        h, up, down = _bookmaker_line(b, use_initial)
+        h, up, down = _bookmaker_line(b)
         disp.append({
             "name": b.name,
             "handicap": h,
@@ -166,7 +159,6 @@ def analyze_nba_spread(match: NbaSpreadMatch) -> NbaSpreadAnalysis:
 
 
 def format_nba_spread_report(r: NbaSpreadAnalysis) -> str:
-    period_label = "初盘" if r.is_historical else "即时"
     L = []
     L.append("=" * 60)
     L.append(f"篮球让分(盘口)方向概率分析  [{r.match_id}]")
@@ -174,12 +166,9 @@ def format_nba_spread_report(r: NbaSpreadAnalysis) -> str:
     L.append(f"对阵   : {r.hometeam} VS {r.guestteam}")
     L.append(f"开赛时间: {r.match_time}")
     L.append(f"数据抓取: {r.fetched_at}")
-    if r.is_historical:
-        L.append("[历史比赛] 百家公司按赛前最终初盘计算；竞彩官方无滚球盘，使用页面最新数据")
-    else:
-        L.append("[未开赛] 百家公司按即时盘口计算；竞彩官方无滚球盘，使用页面最新数据")
+    L.append("[最新盘口] 百家公司统一按页面即时盘口计算；竞彩官方无滚球盘，使用页面最新数据")
     L.append("")
-    L.append(f"主流{period_label}让分: {r.main_handicap_label}  （{r.main_line_n}/{r.n_companies} 家公司）")
+    L.append(f"主流即时让分: {r.main_handicap_label}  （{r.main_line_n}/{r.n_companies} 家公司）")
     L.append("")
     L.append("【市场共识：主队覆盖让分概率】")
     L.append(f"  主流线({r.main_handicap_label})下: 主 {r.main_line_home_cover*100:.1f}% / 客 {r.main_line_away_cover*100:.1f}%")
@@ -196,7 +185,7 @@ def format_nba_spread_report(r: NbaSpreadAnalysis) -> str:
         better = "主队覆盖" if edge > 0 else ("客队覆盖" if edge < 0 else "均衡")
         L.append(f"  体彩价值(隐含-共识): {edge:+.1f}pp  -> 相对市场，竞彩更看好【{better}】")
         L.append("")
-    L.append(f"【各公司{period_label}盘口(主流线，按主覆盖降序，前 12 家)】")
+    L.append("【各公司即时盘口(主流线，按主覆盖降序，前 12 家)】")
     L.append(f"  {'公司':<10}{'让分':>8}{'上盘':>8}{'下盘':>8}{'主覆盖%':>10}")
     for d in r.companies[:12]:
         tag = "*" if d["is_lottery"] else " "
