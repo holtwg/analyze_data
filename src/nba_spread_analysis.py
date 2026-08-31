@@ -61,9 +61,10 @@ class NbaSpreadAnalysis:
 
 
 def _bookmaker_line(b: NbaSpreadBookmaker):
-    """选择盘口线：统一使用页面最新（即时）盘口。
+    """选择盘口线：统一使用页面有效盘口（赛前终盘/当前即时盘）。
 
-    体彩官* 无滚球盘，若其即时盘缺失则回退到初盘。
+    解析阶段已优先取 ``wholeOdds`` 列，因此历史比赛为赛前封盘盘口，
+    未开赛为当前即时盘口。仅在有效盘缺失时回退到初盘。
     """
     if b.live_up > 0 and b.live_down > 0:
         return b.live_handicap, b.live_up, b.live_down
@@ -166,9 +167,12 @@ def format_nba_spread_report(r: NbaSpreadAnalysis) -> str:
     L.append(f"对阵   : {r.hometeam} VS {r.guestteam}")
     L.append(f"开赛时间: {r.match_time}")
     L.append(f"数据抓取: {r.fetched_at}")
-    L.append("[最新盘口] 百家公司统一按页面即时盘口计算；竞彩官方无滚球盘，使用页面最新数据")
+    if r.is_historical:
+        L.append("[历史比赛] 百家公司按赛前封盘盘口计算；竞彩官方无滚球盘，使用页面最新数据")
+    else:
+        L.append("[未开赛] 百家公司按当前即时盘口计算；竞彩官方无滚球盘，使用页面最新数据")
     L.append("")
-    L.append(f"主流即时让分: {r.main_handicap_label}  （{r.main_line_n}/{r.n_companies} 家公司）")
+    L.append(f"主流让分: {r.main_handicap_label}  （{r.main_line_n}/{r.n_companies} 家公司）")
     L.append("")
     L.append("【市场共识：主队覆盖让分概率】")
     L.append(f"  主流线({r.main_handicap_label})下: 主 {r.main_line_home_cover*100:.1f}% / 客 {r.main_line_away_cover*100:.1f}%")
@@ -185,7 +189,7 @@ def format_nba_spread_report(r: NbaSpreadAnalysis) -> str:
         better = "主队覆盖" if edge > 0 else ("客队覆盖" if edge < 0 else "均衡")
         L.append(f"  体彩价值(隐含-共识): {edge:+.1f}pp  -> 相对市场，竞彩更看好【{better}】")
         L.append("")
-    L.append("【各公司即时盘口(主流线，按主覆盖降序，前 12 家)】")
+    L.append("【各公司盘口(主流线，按主覆盖降序，前 12 家)】")
     L.append(f"  {'公司':<10}{'让分':>8}{'上盘':>8}{'下盘':>8}{'主覆盖%':>10}")
     for d in r.companies[:12]:
         tag = "*" if d["is_lottery"] else " "

@@ -75,26 +75,77 @@ def _f(v: str) -> float | None:
 
 
 def parse_spread_html(html: str) -> list[NbaSpreadBookmaker]:
-    """从让分 HTML 表格解析各公司让分盘口。"""
+    """从让分 HTML 表格解析各公司让分盘口。
+
+    titan007 让分页每家公司行同时包含多组盘口：
+      - 初盘（页面固定列，无 oddstype 属性）
+      - ``wholeLastOdds``（页面默认显示的"即时"列；历史比赛时可能是赛后/滚球盘）
+      - ``wholeOdds``（select 下拉中的"终盘"列；未开赛即当前盘口，历史比赛即赛前最终盘）
+
+    为避免历史比赛混入赛后滚球盘口，本解析器优先取 ``wholeOdds`` 列作为有效盘口；
+    仅在该列缺失时才回退到 ``wholeLastOdds``。
+    """
     rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL)
     out: list[NbaSpreadBookmaker] = []
     for row in rows:
         if "companyID" not in row and 'id="td_' not in row:
             continue
-        tds = re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
-        vals = [re.sub(r"<[^>]+>", "", t).strip() for t in tds]
-        name = vals[0] if vals else ""
+
+        # 提取每个 td 的完整 HTML 与 oddstype 属性
+        td_matches = re.findall(r'<td[^>]*>.*?</td>', row, re.DOTALL)
+        tds: list[dict[str, str]] = []
+        for td_html in td_matches:
+            text = re.sub(r"<[^>]+>", "", td_html).strip()
+            ot_match = re.search(r'oddstype=["\']?([^"\'>]+)["\']?', td_html, re.IGNORECASE)
+            oddstype = ot_match.group(1).strip().lower() if ot_match else ""
+            tds.append({"text": text, "oddstype": oddstype})
+
+        if not tds:
+            continue
+        name = tds[0]["text"]
         if not name or name in ("公司", "多盘"):
             continue
-        # 收集该行全部浮点数：前 6 个 = 初(上,让,下) + 即(上,让,下)
-        floats: list[float] = []
-        for v in vals:
-            fv = _f(v)
+
+        # 初盘：前几个无 oddstype 的数值单元格
+        init_floats: list[float] = []
+        for td in tds:
+            if td["oddstype"]:
+                continue
+            fv = _f(td["text"])
             if fv is not None:
-                floats.append(fv)
-        if len(floats) < 6:
+                init_floats.append(fv)
+        if len(init_floats) < 3:
             continue
-        iu, ih, idn, lu, lh, ldn = floats[:6]
+        iu, ih, idn = init_floats[:3]
+
+        # 按 oddstype 分组收集有效盘口
+        type_floats: dict[str, list[float]] = {}
+        for td in tds:
+            if not td["oddstype"]:
+                continue
+            fv = _f(td["text"])
+            if fv is not None:
+                type_floats.setdefault(td["oddstype"], []).append(fv)
+
+        whole_odds = type_floats.get("wholeodds", [])
+        last_odds = type_floats.get("wholelastodds", [])
+
+        # 优先 wholeOdds（赛前终盘/当前即时盘），缺失则回退 wholeLastOdds
+        if len(whole_odds) >= 3:
+            lu, lh, ldn = whole_odds[:3]
+        elif len(last_odds) >= 3:
+            lu, lh, ldn = last_odds[:3]
+        else:
+            # 兜底：按顺序取初盘后的前 3 个浮点数
+            all_floats: list[float] = []
+            for td in tds:
+                fv = _f(td["text"])
+                if fv is not None:
+                    all_floats.append(fv)
+            if len(all_floats) < 6:
+                continue
+            lu, lh, ldn = all_floats[3], all_floats[4], all_floats[5]
+
         # 合理性校验：让分在 [-50,50]，赔率在 (0.3, 5) 区间
         if not (-50 <= ih <= 50 and -50 <= lh <= 50):
             continue
@@ -137,8 +188,9 @@ def _is_historical_match(match_time: str, fetched_at: datetime | None = None) ->
 def fetch_nba_spread(match_id: str) -> NbaSpreadMatch:
     """抓取并解析指定篮球比赛的让分数据。
 
-    服务端动态渲染当前盘口；若比赛已开赛（历史比赛），后续分析会自动切换为
-    赛前最终初盘，避免赛后即时盘失真。
+    让分页面包含多组盘口（初盘、wholeLastOdds、wholeOdds）。解析器优先取
+    ``wholeOdds`` 列：未开赛即当前即时盘口，历史比赛即赛前封盘盘口，从而
+    避免赛后滚球盘口混入历史比赛的分析结果。
     """
     url = NBA_SPREAD_URL_TMPL.format(match_id=match_id)
     try:
