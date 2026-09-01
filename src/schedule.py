@@ -34,8 +34,9 @@ _NUMBER_RE = re.compile(r"(?:^|[^\d])(\d{1,3})(?:[^\d]|$)")
 _DIRECT_ID_RE = re.compile(r"\b(\d{6,})\b")
 _LABEL_RE = re.compile(r"周[一二三四五六日]\d{1,3}")
 # JcResult.aspx / bf_jc.txt 中每场比赛以 "!" 分隔；某些比赛把 ScheduleID 放在
-# subleague.aspx?sclassid={联赛ID}${ScheduleID}（大小写不敏感）里，其余比赛 ScheduleID 在字段 0。
-_SUBLEAGUE_URL_RE = re.compile(r"subleague\.aspx\?sclassid=\d+\$(\d{6,8})", re.IGNORECASE)
+# subleague.aspx?SclassID={联赛ID}${ScheduleID} 或 cupmatch.aspx?SclassID={联赛ID}${ScheduleID}
+# （大小写不敏感）里，其余比赛 ScheduleID 在字段 0。
+_LEAGUE_URL_RE = re.compile(r"(?:subleague|cupmatch)\.aspx\?sclassid=\d+\$(\d{6,8})", re.IGNORECASE)
 _MATCH_ID_RE = re.compile(r"\b(\d{6,8})\b")
 
 
@@ -93,15 +94,17 @@ def _parse_bf_jc(raw: str) -> list[dict[str, object]]:
     """解析 bf_jc.txt，返回带官方编号（周X00N）的赛事列表。
 
     该文件是 jc.titan007.com 首页/赛程页实际使用的数据源，以 ``!`` 分隔记录。
-    数据段有两种形态：
+    数据段形态不固定：
 
-    - 普通段：字段 0 为 ScheduleID，字段 4 为 ``周X00N`` 标签，字段 8/10 为主客队名。
-    - 特殊段（如每个联赛首场）：字段 0 为联赛 ID，真正的 ScheduleID 嵌在
-      ``SubLeague.aspx?SclassID={联赛ID}${ScheduleID}`` 链接里（字段 5），
-      标签在字段 9，队名在字段 13/15。
+    - 普通段：字段 0 为 ScheduleID，字段 4 为 ``周X00N`` 标签，字段 8/10 为主客队名，
+      字段 1 为开赛时间。
+    - 特殊段（联赛首场/杯赛）：字段 0 为联赛 ID，真正的 ScheduleID 嵌在
+      ``SubLeague.aspx?SclassID={联赛ID}${ScheduleID}`` 或
+      ``CupMatch.aspx?SclassID={联赛ID}${ScheduleID}`` 链接里（字段 5），
+      标签位置可能为字段 8/9，队名在标签后第 4/6 个字段，开赛时间通常在字段 6。
 
-    因此解析时：先在整个段中搜索官方编号标签；有 subleague URL 时按特殊段取 ID
-    与队名，否则按普通段取。
+    因此解析时：先在整个段中搜索官方编号标签，定位标签字段索引；再从 league/cup URL
+    取 ScheduleID；最后按标签相对位置取队名与时间。
     """
     matches: list[dict[str, object]] = []
     for seg in raw.split("!"):
@@ -117,16 +120,29 @@ def _parse_bf_jc(raw: str) -> list[dict[str, object]]:
             continue
         label = label_m.group(0)
 
-        # 优先从 subleague URL 取 ScheduleID（特殊段）
-        url_m = _SUBLEAGUE_URL_RE.search(seg)
-        if url_m:
+        # 定位标签字段索引
+        label_idx: int | None = None
+        for i, f in enumerate(fields):
+            if f.strip() == label:
+                label_idx = i
+                break
+        if label_idx is None:
+            continue
+
+        # 优先从 subleague / cupmatch URL 取 ScheduleID（特殊段）
+        url_m = _LEAGUE_URL_RE.search(seg)
+        is_special = url_m is not None
+        if is_special:
             match_id = url_m.group(1)
-            home_idx, away_idx = 13, 15
-            time_idx = 6
         else:
             match_id = fields[0].strip()
-            home_idx, away_idx = 8, 10
-            time_idx = 1
+
+        # 队名位于标签后第 4、第 6 个字段（普通段与特殊段均满足此相对关系）
+        home_idx = label_idx + 4
+        away_idx = label_idx + 6
+
+        # 开赛时间：特殊段在字段 6，普通段在字段 1
+        time_idx = 6 if is_special else 1
 
         home_names = fields[home_idx].split(",") if len(fields) > home_idx and fields[home_idx] else [""]
         away_names = fields[away_idx].split(",") if len(fields) > away_idx and fields[away_idx] else [""]
@@ -252,8 +268,8 @@ def _parse_jc_result(raw: str) -> list[dict[str, object]]:
         label = label_m.group(0)
         fields = seg.split("^")
 
-        # 优先从 league URL 里取 ScheduleID（首个比赛段）
-        url_m = _SUBLEAGUE_URL_RE.search(seg)
+        # 优先从 league / cup URL 里取 ScheduleID（首个比赛段或杯赛段）
+        url_m = _LEAGUE_URL_RE.search(seg)
         if url_m:
             match_id = url_m.group(1)
         else:
