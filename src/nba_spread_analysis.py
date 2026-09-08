@@ -258,10 +258,9 @@ def format_nba_spread_report(r: NbaSpreadAnalysis) -> str:
     L.append(f"  全部公司均值        : 主 {r.consensus_home_cover*100:.1f}% / 客 {r.consensus_away_cover*100:.1f}%")
     L.append("")
     L.append("【让分盘离散度】")
-    L.append(f"  主覆盖概率标准差: {r.cover_std*100:.2f}%")
-    L.append(f"  主覆盖概率 IQR   : {r.cover_iqr*100:.2f}%")
-    L.append(f"  客覆盖概率标准差: {r.cover_away_std*100:.2f}%")
-    L.append(f"  客覆盖概率 IQR   : {r.cover_away_iqr*100:.2f}%")
+    L.append(f"  主/客覆盖概率标准差: {r.cover_std*100:.2f}%")
+    L.append(f"  主/客覆盖概率 IQR  : {r.cover_iqr*100:.2f}%")
+    L.append("  （客覆盖 = 100% - 主覆盖，标准差/IQR 数值必然相同）")
     L.append(f"  市场一致性判断: {'高' if r.cover_iqr*100 < 5 else ('中等' if r.cover_iqr*100 < 10 else '低')}（IQR 越小越一致）")
     L.append("")
     if r.ml_consensus_home is not None:
