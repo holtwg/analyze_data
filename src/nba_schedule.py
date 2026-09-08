@@ -29,9 +29,9 @@ _SEG_RE = re.compile(r"(?:^|[\$!])(\d{6,8})")   # 单场 ScheduleID 标记（段
 _LABEL_RE = re.compile(r"周[一二三四五六日]\s*\d{2,3}")
 _LEAGUE_PREFIX_RE = re.compile(r"(?:^|!|\$)(\d+)\^#?[0-9A-Fa-f]*\^([^!$\^]+?)\^")
 # 篮球联赛关键词 + 已知联赛 ID 白名单（用于从历史混合列表中筛篮球）。
-# 世亚预/世欧预等杯赛名称不含"篮"字，但属于篮球赛事，需按 ID 识别。
+# 世亚预/世欧预/世女杯等杯赛名称不含"篮"字，但属于篮球赛事，需按 ID 识别。
 _BASKET_KEYWORDS = ("篮", "WNBA", "NBA", "美职篮", "Basketball", "Basket")
-_BASKETBALL_LEAGUE_IDS = {"2", "406", "408"}
+_BASKETBALL_LEAGUE_IDS = {"2", "219", "406", "408"}
 
 NUMBER_BASE = 301
 _JC_REFERER = "https://jc.titan007.com/nba/index.aspx"
