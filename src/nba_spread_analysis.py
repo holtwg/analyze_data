@@ -57,6 +57,8 @@ class NbaSpreadAnalysis:
     # 新增：离散度
     cover_std: float = 0.0               # 主覆盖概率标准差
     cover_iqr: float = 0.0                # 主覆盖概率 IQR
+    cover_away_std: float = 0.0           # 客覆盖概率标准差（数学上等于主，但单独展示更完整）
+    cover_away_iqr: float = 0.0           # 客覆盖概率 IQR
     # 新增：与胜负盘一致性
     ml_consensus_home: float | None = None
     ml_consensus_away: float | None = None
@@ -131,6 +133,8 @@ def analyze_nba_spread(match: NbaSpreadMatch, ml_result: NbaAnalysisResult | Non
     cover_values = [c for _, c in covers]
     cover_std = _safe_std(cover_values)
     cover_iqr = _safe_iqr(cover_values)
+    cover_away_std = _safe_std([1.0 - c for c in cover_values])
+    cover_away_iqr = _safe_iqr([1.0 - c for c in cover_values])
 
     # 主流让分（mode）
     cnt = Counter(_bookmaker_line(b)[0] for b, _ in covers)
@@ -215,6 +219,8 @@ def analyze_nba_spread(match: NbaSpreadMatch, ml_result: NbaAnalysisResult | Non
         main_line_n=len(main_line),
         cover_std=cover_std,
         cover_iqr=cover_iqr,
+        cover_away_std=cover_away_std,
+        cover_away_iqr=cover_away_iqr,
         ml_consensus_home=ml_consensus_home,
         ml_consensus_away=ml_consensus_away,
         spread_favored=spread_favored,
@@ -254,6 +260,8 @@ def format_nba_spread_report(r: NbaSpreadAnalysis) -> str:
     L.append("【让分盘离散度】")
     L.append(f"  主覆盖概率标准差: {r.cover_std*100:.2f}%")
     L.append(f"  主覆盖概率 IQR   : {r.cover_iqr*100:.2f}%")
+    L.append(f"  客覆盖概率标准差: {r.cover_away_std*100:.2f}%")
+    L.append(f"  客覆盖概率 IQR   : {r.cover_away_iqr*100:.2f}%")
     L.append(f"  市场一致性判断: {'高' if r.cover_iqr*100 < 5 else ('中等' if r.cover_iqr*100 < 10 else '低')}（IQR 越小越一致）")
     L.append("")
     if r.ml_consensus_home is not None:
