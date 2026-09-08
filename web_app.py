@@ -141,10 +141,17 @@ def build_report(kind: str, ref: str, mode: str):
         from src.schedule import resolve_match_ref
         from src.odds import fetch_match_odds
         from src.analysis import analyze, format_report
+        from src.football_asian_odds import fetch_football_asian
         resolved = resolve_match_ref(ref)
         mid = str(resolved["match_id"])
         match = fetch_match_odds(mid)
-        report = format_report(analyze(match))
+        # 亚盘数据（欧亚一致性用），抓取失败不影响欧赔分析
+        asian = None
+        try:
+            asian = fetch_football_asian(mid)
+        except Exception:
+            asian = None
+        report = format_report(analyze(match, asian=asian))
         note = f"解析：{resolved['source']} -> ID {mid}"
         if resolved.get("label"):
             note += f"  （{resolved['label']}"

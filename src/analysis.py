@@ -19,12 +19,52 @@ from dataclasses import dataclass, field
 
 from .config import OUTCOME_LABELS
 from .odds import MatchOdds
+from .football_asian_odds import AsianBookmaker
 
 
 def margin_removed_probs(home: float, draw: float, away: float) -> tuple[float, float, float]:
     """由十进制赔率计算去水隐含概率（%，已归一化）。"""
     inv = 1.0 / home + 1.0 / draw + 1.0 / away
     return (1.0 / home) / inv * 100, (1.0 / draw) / inv * 100, (1.0 / away) / inv * 100
+
+
+def _iqr(vals: list[float]) -> float:
+    """四分位距 IQR = P75 - P25（线性插值）。衡量数据离散程度。"""
+    if len(vals) < 2:
+        return 0.0
+    s = sorted(vals)
+    n = len(s)
+
+    def _pct(p: float) -> float:
+        if n == 1:
+            return s[0]
+        idx = p * (n - 1)
+        lo = int(idx)
+        hi = min(n - 1, lo + 1)
+        return s[lo] + (s[hi] - s[lo]) * (idx - lo)
+
+    return _pct(0.75) - _pct(0.25)
+
+
+def _mode_val(vals: list[float]) -> float:
+    """返回数值列表的众数（按 2 位小数聚合），用于确定主流让球盘口。"""
+    from collections import Counter
+
+    c = Counter(round(v, 2) for v in vals)
+    return c.most_common(1)[0][0]
+
+
+def _fmt_goals(g: float) -> str:
+    """数值让球 -> 中文描述（主队视角）。g>0 主让，g<0 客让。"""
+    sign = "主让" if g > 0 else "客让"
+    a = abs(g)
+    table = {
+        0: "平手", 0.25: "平手/半球", 0.5: "半球", 0.75: "半球/一球",
+        1: "一球", 1.25: "一球/球半", 1.5: "球半", 1.75: "球半/两球",
+        2: "两球", 2.25: "两球/两球半", 2.5: "两球半",
+    }
+    desc = table.get(a, f"{a}")
+    return f"{sign}{desc}"
 
 
 @dataclass(slots=True)
@@ -45,11 +85,28 @@ class AnalysisResult:
     best_value: tuple[str, float] | None            # (方向, edge pp)
     fetched_at: str = ""                            # 数据抓取时间（本地）
     lottery_update: str = ""                        # 体彩赔率更新时间
+    # —— 市场一致性（凯利指数 + 离散度）——
+    kelly_mean: tuple[float, float, float] | None = None
+    kelly_var: tuple[float, float, float] | None = None
+    kelly_favored: str | None = None               # 凯利最低方向（庄家真实倾向）
+    disp_std: tuple[float, float, float] | None = None
+    disp_iqr: tuple[float, float, float] | None = None
+    # —— 欧亚一致性 ——
+    asian_handicap: float | None = None
+    asian_handicap_label: str = ""
+    asian_win_prob: float | None = None            # 亚盘去水赢盘概率（让球方打穿）
+    asian_favored: str | None = None               # 亚盘看好方（主胜/客胜）
+    eurasian_agree: bool | None = None
+    eurasian_note: str = ""
     notes: list[str] = field(default_factory=list)
 
 
-def analyze(match: MatchOdds) -> AnalysisResult:
-    """对一场比赛做完整的胜平负概率与体彩方向分析。"""
+def analyze(match: MatchOdds, asian: list[AsianBookmaker] | None = None) -> AnalysisResult:
+    """对一场比赛做完整的胜平负概率与体彩方向分析。
+
+    ``asian`` 为可选的足球亚盘数据（各公司让球盘口），传入后额外计算
+    「欧亚一致性」分析，用亚盘方向佐证欧赔胜平负方向。
+    """
     rows = [b for b in match.bookmakers if b.live_prob_home > 0]
     if not rows:
         raise ValueError("没有可用的即时赔率数据，无法分析")
@@ -101,6 +158,52 @@ def analyze(match: MatchOdds) -> AnalysisResult:
     prob_idx = max(range(3), key=lambda i: c_mean[i])
     most_probable = (OUTCOME_LABELS[prob_idx], c_mean[prob_idx])
 
+    # —— 市场一致性：凯利指数 + 离散度 ——
+    kelly_rows = [
+        b for b in match.bookmakers
+        if b.kelly_home > 0 and b.kelly_draw > 0 and b.kelly_away > 0
+    ]
+    kelly_mean = kelly_var = kelly_favored = None
+    if kelly_rows:
+        kh = [b.kelly_home for b in kelly_rows]
+        kd = [b.kelly_draw for b in kelly_rows]
+        ka = [b.kelly_away for b in kelly_rows]
+        kelly_mean = (statistics.mean(kh), statistics.mean(kd), statistics.mean(ka))
+        kelly_var = (statistics.pvariance(kh), statistics.pvariance(kd), statistics.pvariance(ka))
+        kf_idx = min(range(3), key=lambda i: kelly_mean[i])
+        kelly_favored = OUTCOME_LABELS[kf_idx]
+    # 离散度基于各公司即时隐含概率（wisdom of crowds 的原始分布）
+    disp_std = (statistics.pstdev(homes), statistics.pstdev(draws), statistics.pstdev(aways))
+    disp_iqr = (_iqr(homes), _iqr(draws), _iqr(aways))
+
+    # —— 欧亚一致性：亚盘方向佐证欧赔方向 ——
+    asian_handicap = asian_handicap_label = asian_win_prob = asian_favored = None
+    eurasian_agree = None
+    eurasian_note = ""
+    if asian:
+        goals_list = [a.goals for a in asian]
+        main_g = _mode_val(goals_list)
+        line = [a for a in asian if abs(a.goals - main_g) < 1e-6]
+        if line:
+            # 让球方 = 上盘；去水后「让球方打穿盘口」概率 = 下盘水位/(上+下)
+            qs = [a.down / (a.up + a.down) for a in line]
+            q = statistics.mean(qs)
+            asian_handicap = main_g
+            asian_handicap_label = _fmt_goals(main_g)
+            asian_win_prob = q
+            favored_side = "主胜" if main_g > 0 else "客胜"
+            asian_favored = favored_side if q > 0.5 else ("客胜" if favored_side == "主胜" else "主胜")
+            eu = most_probable[0]
+            if asian_favored in ("主胜", "客胜") and eu in ("主胜", "客胜"):
+                eurasian_agree = (asian_favored == eu)
+                eurasian_note = (
+                    "欧亚方向一致，相互佐证"
+                    if eurasian_agree
+                    else f"欧亚方向分歧：亚盘看好{asian_favored}，欧赔最看好{eu}，谨慎对待"
+                )
+            else:
+                eurasian_note = f"亚盘方向参考：看好{asian_favored}"
+
     return AnalysisResult(
         match_id=match.match_id,
         home=match.hometeam,
@@ -118,6 +221,17 @@ def analyze(match: MatchOdds) -> AnalysisResult:
         best_value=best_value,
         fetched_at=match.fetched_at,
         lottery_update=lottery_update,
+        kelly_mean=kelly_mean,
+        kelly_var=kelly_var,
+        kelly_favored=kelly_favored,
+        disp_std=disp_std,
+        disp_iqr=disp_iqr,
+        asian_handicap=asian_handicap,
+        asian_handicap_label=asian_handicap_label,
+        asian_win_prob=asian_win_prob,
+        asian_favored=asian_favored,
+        eurasian_agree=eurasian_agree,
+        eurasian_note=eurasian_note,
         notes=notes,
     )
 
@@ -162,6 +276,37 @@ def format_report(r: AnalysisResult) -> str:
     else:
         lines.append(f"  -> 概率最高方向：{r.most_probable[0]}（{r.most_probable[1]:.2f}%）")
     lines.append("")
+    lines.append("【市场一致性分析（凯利指数 + 离散度）】")
+    if r.kelly_mean is not None:
+        lines.append(
+            f"  凯利指数均值: 主 {r.kelly_mean[0]:.3f} / 平 {r.kelly_mean[1]:.3f} / 客 {r.kelly_mean[2]:.3f}"
+        )
+        lines.append(
+            f"  凯利指数方差: 主 {r.kelly_var[0]:.4f} / 平 {r.kelly_var[1]:.4f} / 客 {r.kelly_var[2]:.4f}"
+            f"  （越小越一致）"
+        )
+        lines.append(f"  庄家倾向(凯利最低方向): {r.kelly_favored}")
+    if r.disp_std is not None:
+        lines.append(
+            f"  离散度(标准差): 主 {r.disp_std[0]:.2f}% / 平 {r.disp_std[1]:.2f}% / 客 {r.disp_std[2]:.2f}%"
+        )
+        lines.append(
+            f"  离散度(IQR):    主 {r.disp_iqr[0]:.2f}% / 平 {r.disp_iqr[1]:.2f}% / 客 {r.disp_iqr[2]:.2f}%"
+        )
+        lines.append("   注：离散度低 = 各家公司看法集中；高 = 分歧大、风险高")
+    lines.append("")
+    if r.asian_handicap is not None:
+        lines.append("【欧亚一致性分析】")
+        lines.append(f"  主流亚盘让球: {r.asian_handicap_label}")
+        lines.append(f"  亚盘去水赢盘概率(让球方打穿盘口): {r.asian_win_prob * 100:.2f}%")
+        lines.append(f"  亚盘看好方: {r.asian_favored}")
+        lines.append(f"  欧赔最看好方: {r.most_probable[0]}（{r.most_probable[1]:.2f}%）")
+        if r.eurasian_agree is not None:
+            mark = "方向一致，相互佐证" if r.eurasian_agree else "方向分歧，谨慎对待"
+            lines.append(f"  -> {mark}：{r.eurasian_note}")
+        else:
+            lines.append(f"  -> {r.eurasian_note}")
+        lines.append("")
     for n in r.notes:
         lines.append(f"  注：{n}")
     lines.append("")

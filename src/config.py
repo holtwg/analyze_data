@@ -33,6 +33,13 @@ ODDS_JS_URL = "https://1x2d.titan007.com/{match_id}.js"
 # 欧指列表页（仅用于 Referer，真实数据在上面的 JS 文件里）
 ODDS_LIST_PAGE = "https://op1.titan007.com/oddslist/{match_id}.htm"
 
+# 足球亚洲盘(让球)盘口页（HTML 表格，UTF-8）。按 ScheduleID 取。
+#   例：2929718 -> https://vip.titan007.com/AsianOdds_n.aspx?id=2929718&l=0
+# 该页以 HTML 表格展示各公司让球盘口：初盘 + 即时(oddstype=wholeLastOdds) +
+# 终盘(oddstype=wholeOdds，隐藏)。每行 goals 属性直接给出数值让球（主队视角，负=客让）。
+# 与篮球亚盘同理，优先取终盘(wholeOdds)以反映赛前封盘，缺失时回退即时盘。
+FOOTBALL_ASIAN_URL_TMPL = "https://vip.titan007.com/AsianOdds_n.aspx?id={match_id}&l=0"
+
 # game 数组中「竞彩官*」行的判定关键字
 LOTTERY_KEYWORDS = ("竞彩官", "Lottery Official")
 
