@@ -3,15 +3,20 @@
 核心输出：给定让分盘口，市场（百家）对「主队覆盖让分」的共识概率，
 并对照竞彩官方让分盘的隐含概率，给出体彩价值研判。
 
+同时与篮球胜负盘（moneyline）做交叉验证：让分盘看好方向应与胜负盘
+最看好方向一致；若方向相反，提示存在矛盾信号。
+
 盘口惯例：titan007 让分页全部以香港盘(水位)显示，去水概率使用
 ``p_主 = 1/(1+O_上) / (1/(1+O_上) + 1/(1+O_下))``。
 """
 from __future__ import annotations
 
+import statistics
 from collections import Counter
 from dataclasses import dataclass, field
 from statistics import mean
 
+from .nba_analysis import NbaAnalysisResult
 from .nba_spread_odds import NbaSpreadBookmaker, NbaSpreadMatch
 
 
@@ -49,6 +54,15 @@ class NbaSpreadAnalysis:
     main_line_home_cover: float          # 主流让分线下的均值
     main_line_away_cover: float
     main_line_n: int                     # 主流线公司数
+    # 新增：离散度
+    cover_std: float = 0.0               # 主覆盖概率标准差
+    cover_iqr: float = 0.0                # 主覆盖概率 IQR
+    # 新增：与胜负盘一致性
+    ml_consensus_home: float | None = None
+    ml_consensus_away: float | None = None
+    spread_favored: str = ""             # 让分盘看好方向
+    ml_favored: str | None = None        # 胜负盘最看好方向
+    consistency_note: str = ""            # 一致性结论
     lottery_handicap: float | None = None
     lottery_handicap_label: str = ""
     lottery_up: float | None = None
@@ -73,7 +87,26 @@ def _bookmaker_line(b: NbaSpreadBookmaker):
     return b.init_handicap, b.init_up, b.init_down
 
 
-def analyze_nba_spread(match: NbaSpreadMatch) -> NbaSpreadAnalysis:
+def _safe_std(data: list[float]) -> float:
+    if len(data) < 2:
+        return 0.0
+    try:
+        return statistics.stdev(data)
+    except statistics.StatisticsError:
+        return 0.0
+
+
+def _safe_iqr(data: list[float]) -> float:
+    if len(data) < 2:
+        return 0.0
+    try:
+        qs = statistics.quantiles(data, n=4, method="inclusive")
+        return qs[2] - qs[0]
+    except statistics.StatisticsError:
+        return 0.0
+
+
+def analyze_nba_spread(match: NbaSpreadMatch, ml_result: NbaAnalysisResult | None = None) -> NbaSpreadAnalysis:
     rows = []
     for b in match.bookmakers:
         h, up, down = _bookmaker_line(b)
@@ -93,6 +126,11 @@ def analyze_nba_spread(match: NbaSpreadMatch) -> NbaSpreadAnalysis:
 
     consensus_home = mean(c for _, c in covers)
     consensus_away = 1.0 - consensus_home
+
+    # 让分盘离散度
+    cover_values = [c for _, c in covers]
+    cover_std = _safe_std(cover_values)
+    cover_iqr = _safe_iqr(cover_values)
 
     # 主流让分（mode）
     cnt = Counter(_bookmaker_line(b)[0] for b, _ in covers)
@@ -133,6 +171,34 @@ def analyze_nba_spread(match: NbaSpreadMatch) -> NbaSpreadAnalysis:
         })
     disp.sort(key=lambda d: (not d["is_lottery"], -d["home_cover"]))
 
+    # 与胜负盘（moneyline）一致性校验
+    ml_consensus_home = ml_consensus_away = None
+    spread_favored = ml_favored = ""
+    consistency_note = "未提供胜负盘数据，无法做让分-胜负一致性校验。"
+    if ml_result is not None:
+        ml_consensus_home = ml_result.consensus[0]
+        ml_consensus_away = ml_result.consensus[1]
+        diff = abs(consensus_home - consensus_away)
+        if diff <= 0.02:
+            spread_favored = "接近均衡"
+        elif consensus_home > consensus_away:
+            spread_favored = "主胜"
+        else:
+            spread_favored = "客胜"
+        ml_favored = ml_result.most_probable[0]
+        if spread_favored == "接近均衡":
+            consistency_note = (
+                f"让分盘接近均衡（主/客覆盖差距 {diff*100:.1f}pp），"
+                f"胜负盘更看好【{ml_favored}】，让分盘对胜负方向指引有限。"
+            )
+        elif spread_favored == ml_favored:
+            consistency_note = f"方向一致：让分盘与胜负盘均看好【{spread_favored}】，相互佐证。"
+        else:
+            consistency_note = (
+                f"方向分歧：让分盘看好【{spread_favored}】，"
+                f"胜负盘看好【{ml_favored}】，两个市场信号不一致，谨慎对待。"
+            )
+
     return NbaSpreadAnalysis(
         match_id=match.match_id,
         hometeam=match.hometeam,
@@ -147,6 +213,13 @@ def analyze_nba_spread(match: NbaSpreadMatch) -> NbaSpreadAnalysis:
         main_line_home_cover=main_home,
         main_line_away_cover=main_away,
         main_line_n=len(main_line),
+        cover_std=cover_std,
+        cover_iqr=cover_iqr,
+        ml_consensus_home=ml_consensus_home,
+        ml_consensus_away=ml_consensus_away,
+        spread_favored=spread_favored,
+        ml_favored=ml_favored,
+        consistency_note=consistency_note,
         lottery_handicap=lot["handicap"] if lot else None,
         lottery_handicap_label=lot["label"] if lot else "",
         lottery_up=lot["up"] if lot else None,
@@ -178,6 +251,17 @@ def format_nba_spread_report(r: NbaSpreadAnalysis) -> str:
     L.append(f"  主流线({r.main_handicap_label})下: 主 {r.main_line_home_cover*100:.1f}% / 客 {r.main_line_away_cover*100:.1f}%")
     L.append(f"  全部公司均值        : 主 {r.consensus_home_cover*100:.1f}% / 客 {r.consensus_away_cover*100:.1f}%")
     L.append("")
+    L.append("【让分盘离散度】")
+    L.append(f"  主覆盖概率标准差: {r.cover_std*100:.2f}%")
+    L.append(f"  主覆盖概率 IQR   : {r.cover_iqr*100:.2f}%")
+    L.append(f"  市场一致性判断: {'高' if r.cover_iqr*100 < 5 else ('中等' if r.cover_iqr*100 < 10 else '低')}（IQR 越小越一致）")
+    L.append("")
+    if r.ml_consensus_home is not None:
+        L.append("【让分盘与胜负盘一致性校验】")
+        L.append(f"  让分盘看好方  : {r.spread_favored}（主覆盖 {r.consensus_home_cover*100:.1f}%）")
+        L.append(f"  胜负盘最看好方: {r.ml_favored}（主胜 {r.ml_consensus_home:.2f}%）")
+        L.append(f"  -> {r.consistency_note}")
+        L.append("")
     if r.lottery_handicap is not None:
         L.append("【竞彩官方让分盘】")
         L.append(f"  竞彩让分: {r.lottery_handicap_label}  上盘(主队侧) {r.lottery_up} / 下盘(客队侧) {r.lottery_down}")

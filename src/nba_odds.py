@@ -20,6 +20,9 @@ idx  含义                                说明
 10   初盘 主胜率(%)
 11   初盘 客胜率(%)
 12   初盘 返还率(%)
+10   初盘 主胜率(%)                        去水后的隐含概率
+11   初盘 客胜率(%)                        去水后的隐含概率
+12   初盘 返还率(%)
 13   即时 主凯利
 14   即时 客凯利
 15   更新时间
@@ -71,6 +74,9 @@ class NbaBookmakerOdds:
     live_prob_home: float     # 去水隐含主胜率 %
     live_prob_away: float     # 去水隐含客胜率 %
     live_return: float        # 返还率 %
+    init_prob_home: float     # 初盘去水隐含主胜率 %
+    init_prob_away: float     # 初盘去水隐含客胜率 %
+    init_return: float        # 初盘返还率 %
     kelly_home: float
     kelly_away: float
     update_time: str
@@ -148,6 +154,9 @@ def parse_nba_game(js_text: str) -> list[NbaBookmakerOdds]:
                 live_prob_home=_f(f[5]) or 0.0,
                 live_prob_away=_f(f[6]) or 0.0,
                 live_return=_f(f[7]) or 0.0,
+                init_prob_home=_f(f[10]) or 0.0,
+                init_prob_away=_f(f[11]) or 0.0,
+                init_return=_f(f[12]) or 0.0,
                 kelly_home=_f(f[13]) or 0.0,
                 kelly_away=_f(f[14]) or 0.0,
                 update_time=f[15] if len(f) > 15 else "",

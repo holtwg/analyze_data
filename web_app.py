@@ -183,11 +183,13 @@ def build_report(kind: str, ref: str, mode: str):
         note += f"  | 提示：{resolved['note']}"
 
     parts: list[str] = []
+    ml_result = None
 
     # 胜负（moneyline）
     try:
         match = fetch_nba_match_odds(mid)
-        parts.append(format_nba_report(analyze_nba(match)))
+        ml_result = analyze_nba(match)
+        parts.append(format_nba_report(ml_result))
     except Exception:
         rec = _nba_hist(mid, target_date)
         if rec is not None:
@@ -197,7 +199,7 @@ def build_report(kind: str, ref: str, mode: str):
     if mode in ("spread", "both"):
         try:
             smatch = fetch_nba_spread(mid)
-            parts.append(format_nba_spread_report(analyze_nba_spread(smatch)))
+            parts.append(format_nba_spread_report(analyze_nba_spread(smatch, ml_result=ml_result)))
         except Exception:
             rec = _nba_hist(mid, target_date)
             if rec is not None:
