@@ -160,24 +160,64 @@ python web_app.py 9000       # 指定端口
 Cloudflare Quick Tunnels 是当前最稳的免费方案：不绑卡、不要账号、自动生成 HTTPS 公网链接，
 适合先快速把手机跑通。唯一要求是**本机需要一直开着**。
 
-1. 下载 `cloudflared`（**必须是 Windows 版**）：https://github.com/cloudflare/cloudflared/releases
-   - ⚠️ **务必下载 `cloudflared-windows-amd64.exe`**。不要下 `cloudflared-darwin-*` / `cloudflared-linux-*`
-     （mac/Linux 版即便改名成 `.exe` 也无法在 Windows 运行，会报"不是有效的 Win32 应用程序"）。
-   - 把下载的文件改名为 `cloudflared.exe`，放到项目根目录
-     `F:\a\workbuddy\football-odds-analysis\`（脚本优先用本目录的这个 exe，无需加入 PATH）。
-2. 项目根目录已提供 `start_tunnel.ps1` + `start_tunnel.bat`，双击 `start_tunnel.bat` 即可：
-   - 脚本会**自动定位带依赖的 Python**（优先用虚拟环境 `…\envs\default\Scripts\python.exe`），
-     无需手动配置 PATH。
-   - 自动避开被占用的端口（默认 8000，占用则顺延），再启动 `python web_app.py`。
-   - 等服务 `/healthz` 就绪后，启动 `cloudflared tunnel --url http://localhost:端口`。
-   - 控制台会高亮输出形如 `https://xxx.trycloudflare.com` 的公网链接，手机直接打开。
-3. 想手动分步执行：
-   ```powershell
-   # 窗口 1：用虚拟环境 python 启动网页
-   C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe web_app.py
-   # 窗口 2（同一台机器）
-   cloudflared tunnel --url http://localhost:8000
-   ```
+> **跨平台说明**：原先的 `start_tunnel.bat` / `start_tunnel.ps1` 是 Windows 专用。
+> 现已新增**跨平台启动器 `start_tunnel.py`**，在 **Windows / macOS / Linux** 上都能一键启动
+> （自动检测系统架构、自动下载对应版本的 `cloudflared`、自动避开占用端口、自动抓取公网地址）。
+> 推荐统一用 `start_tunnel.py`；Windows 上的 `start_tunnel.bat` 仍保留可用。
+
+#### 一键启动（推荐，全平台通用）
+
+```bash
+# 已安装依赖后，在项目根目录执行：
+python3 start_tunnel.py            # 默认端口 8000，自动建公网隧道
+python3 start_tunnel.py 9000       # 指定端口
+python3 start_tunnel.py --no-tunnel  # 只起本地 Web，不建公网隧道（纯局域网/本机用）
+```
+
+脚本会自动：
+- 定位装有 `httpx` 的 Python（优先用当前解释器）；
+- 启动 `web_app.py` 并等待 `/healthz` 就绪（端口被占用会顺延）；
+- 若本机没有 `cloudflared`，按当前系统/架构从 GitHub Releases 下载（macOS 会自动移除
+  Gatekeeper 隔离属性）；
+- 启动隧道，抓取 `https://xxx.trycloudflare.com` 并写入 `tunnel_url.txt`、尝试复制到剪贴板；
+- 按 `Ctrl+C` 一并清理 Web 与隧道进程。
+
+#### Windows 专用（双击版，仍可用）
+
+双击 `start_tunnel.bat` 即可（内部调用 `start_tunnel.ps1`）：
+- 脚本会**自动定位带依赖的 Python**（优先用虚拟环境 `…\envs\default\Scripts\python.exe`），无需手动配置 PATH。
+- 自动避开被占用的端口（默认 8000，占用则顺延），再启动 `python web_app.py`。
+- 等服务 `/healthz` 就绪后，启动 `cloudflared tunnel --url http://localhost:端口`。
+- 控制台会高亮输出形如 `https://xxx.trycloudflare.com` 的公网链接，手机直接打开。
+
+#### macOS / Linux 手动安装 cloudflared（可选）
+
+一键脚本会自动下载，但你也可以先手动装好（这样启动更快、也更可控）：
+
+```bash
+# macOS（Homebrew）
+brew install cloudflared
+
+# 或手动下载二进制放到项目根目录（脚本会优先使用本目录的 ./cloudflared）
+#   macOS Apple 芯片: cloudflared-darwin-arm64.tgz
+#   macOS Intel    : cloudflared-darwin-amd64.tgz
+#   Linux          : cloudflared-linux-amd64
+# 下载后解压/放到项目根目录并 chmod +x cloudflared
+```
+
+> ⚠️ macOS 从网上下载的二进制默认会被 Gatekeeper 拦截（“无法验证开发者”）。
+> 一键脚本已自动执行 `xattr -dr com.apple.quarantine cloudflared`；若仍报错，
+> 在“系统设置 → 隐私与安全性”中允许，或手动运行上述命令。
+
+#### 手动分步执行（任意平台）
+
+```bash
+# 终端 1：启动网页（macOS/Linux 用 python3；Windows 用 python 或虚拟环境 python）
+python3 web_app.py 8000
+
+# 终端 2（同一台机器）：建立临时隧道
+cloudflared tunnel --url http://localhost:8000
+```
 4. 想要固定域名：到 https://dash.cloudflare.com 注册免费账号 → Zero Trust → Networks → Tunnels →
    Create a tunnel → Cloudflared，按提示安装 connector，配置 Public hostname 指向 `http://localhost:8000`，
    即可获得固定 `https://你的域名.xxx`（仍然免费）。

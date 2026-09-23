@@ -22,6 +22,11 @@ cf_err.log
 cloudflared.exe
 cloudflared.exe.bak
 cloudflared-windows-amd64.exe
+cloudflared
+cloudflared-darwin-amd64
+cloudflared-darwin-arm64
+cloudflared-linux-amd64
+cloudflared-linux-arm64
 
 # IDE
 .idea/
